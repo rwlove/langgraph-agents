@@ -1,11 +1,7 @@
 """Top-level fleet graph.
 
-Phase 2: triager + note-maker + researcher are real nodes; the remaining 10
-specialists still route to a `_pending` stub. Phase 8 replaces the rest of
-the stubs with real nodes one at a time.
-
-The graph entry point is the triager. After triage, the graph routes to the
-target specialist based on `state.target_agent`.
+Phase 8: all 13 agents have real nodes. The `_pending` stub is gone — any
+routing target must resolve to a registered node.
 """
 
 from __future__ import annotations
@@ -16,42 +12,47 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
+from agents.nodes.coder import coder_node
+from agents.nodes.errand_runner import errand_runner_node
+from agents.nodes.health_tracker import health_tracker_node
+from agents.nodes.homelab_engineer import homelab_engineer_node
+from agents.nodes.ml_tuner import ml_tuner_node
 from agents.nodes.note_maker import note_maker_node
+from agents.nodes.property_coordinator import property_coordinator_node
+from agents.nodes.reporter import reporter_node
 from agents.nodes.researcher import researcher_node
+from agents.nodes.reviewer import reviewer_node
+from agents.nodes.smart_home_engineer import smart_home_engineer_node
+from agents.nodes.supervisor import supervisor_node
 from agents.nodes.triager import triager_node
 from agents.state import ALL_AGENT_IDS, AgentId, FleetState
 
-# Agent IDs that have a real node module wired below. Everything else still
-# routes to the `_pending` stub.
-_REAL_NODES: dict[str, str] = {
-    "note-maker": "note-maker",
-    "researcher": "researcher",
-}
-
-
-def _pending_specialist(state: FleetState) -> dict[str, Any]:
-    """Placeholder for specialist nodes that haven't been authored yet.
-
-    Records the routing decision in state.output so the smoke test confirms
-    the triager classified correctly. Phase 8 replaces this with real
-    specialist nodes one at a time.
-    """
-    triage = state.triage
-    summary = triage.summary if triage else "no triage available"
-    target = state.target_agent or "unknown"
-    return {
-        "output": (
-            f"STUB: triager routed to '{target}' (specialist not yet implemented "
-            f"as of phase 2). Summary: {summary}"
-        )
-    }
-
 
 def _route_after_triage(state: FleetState) -> AgentId | str:
-    """Conditional edge: pick the target specialist (real node or stub)."""
+    """Conditional edge from the triager."""
     target = state.target_agent
     if target is None or target == "triager":
         return END
+    return target
+
+
+def _route_after_specialist(state: FleetState) -> AgentId | str:
+    """Conditional edge from a specialist that may have set a rejection.
+
+    If the specialist rejected, route to supervisor. Otherwise END (or, in
+    future phases, route to errand-runner if an approval flow was triggered).
+    """
+    if state.rejection is not None:
+        return "supervisor"
+    return END
+
+
+def _route_after_supervisor(state: FleetState) -> AgentId | str:
+    """Supervisor either reroutes (new target_agent) or escalates (END)."""
+    target = state.target_agent
+    if target is None or target == "supervisor":
+        return END
+    # If supervisor mutated target_agent to a specialist, route there.
     return target
 
 
@@ -59,31 +60,47 @@ def build_fleet_graph(checkpointer: BaseCheckpointSaver[Any] | None = None) -> A
     """Build + compile the fleet graph.
 
     Pass a checkpointer in production (PostgresSaver). Pass None in tests to
-    run without persistence (in-memory-only single invocation).
+    run without persistence.
     """
     builder = StateGraph(FleetState)
 
-    # ---- nodes ----
+    # ---- nodes (13) ----
     builder.add_node("triager", triager_node)
+    builder.add_node("reporter", reporter_node)
     builder.add_node("note-maker", note_maker_node)
     builder.add_node("researcher", researcher_node)
-    builder.add_node("_pending", _pending_specialist)
+    builder.add_node("coder", coder_node)
+    builder.add_node("errand-runner", errand_runner_node)
+    builder.add_node("supervisor", supervisor_node)
+    builder.add_node("reviewer", reviewer_node)
+    builder.add_node("homelab-engineer", homelab_engineer_node)
+    builder.add_node("smart-home-engineer", smart_home_engineer_node)
+    builder.add_node("ml-tuner", ml_tuner_node)
+    builder.add_node("health-tracker", health_tracker_node)
+    builder.add_node("property-coordinator", property_coordinator_node)
 
     # ---- edges ----
     builder.add_edge(START, "triager")
 
-    # Build the routing map: real nodes go to their dedicated node;
-    # everything else routes to the shared stub.
-    route_map: dict[Hashable, str] = {}
-    for agent in ALL_AGENT_IDS:
-        if agent == "triager":
-            continue
-        route_map[agent] = _REAL_NODES.get(agent, "_pending")
-    route_map[END] = END
+    # Triager → one of 12 specialists (or END if triager is somehow the target)
+    triage_route_map: dict[Hashable, str] = {
+        agent: agent for agent in ALL_AGENT_IDS if agent != "triager"
+    }
+    triage_route_map[END] = END
+    builder.add_conditional_edges("triager", _route_after_triage, triage_route_map)
 
-    builder.add_conditional_edges("triager", _route_after_triage, route_map)
-    builder.add_edge("note-maker", END)
-    builder.add_edge("researcher", END)
-    builder.add_edge("_pending", END)
+    # Each specialist routes either to supervisor (on rejection) or END.
+    specialist_route_map: dict[Hashable, str] = {"supervisor": "supervisor", END: END}
+    for agent in ALL_AGENT_IDS:
+        if agent in ("triager", "supervisor"):
+            continue
+        builder.add_conditional_edges(agent, _route_after_specialist, specialist_route_map)
+
+    # Supervisor either reroutes to a specialist or escalates to END.
+    supervisor_route_map: dict[Hashable, str] = {
+        agent: agent for agent in ALL_AGENT_IDS if agent not in ("triager", "supervisor")
+    }
+    supervisor_route_map[END] = END
+    builder.add_conditional_edges("supervisor", _route_after_supervisor, supervisor_route_map)
 
     return builder.compile(checkpointer=checkpointer)
