@@ -1,5 +1,5 @@
 {
-  "name": "langgraph-agents — cost cap watcher",
+  "name": "langgraph-agents \u2014 cost cap watcher",
   "active": false,
   "nodes": [
     {
@@ -7,10 +7,18 @@
       "name": "Hourly",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "parameters": {
         "rule": {
-          "interval": [{ "field": "hours", "hoursInterval": 1 }]
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
         }
       }
     },
@@ -19,13 +27,20 @@
       "name": "GET /admin/costs/today",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "parameters": {
         "method": "GET",
         "url": "http://langgraph-agents.ai.svc.cluster.local:8765/admin/costs/today",
         "options": {
           "timeout": 30000,
-          "response": { "response": { "responseFormat": "json" } }
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
         }
       }
     },
@@ -34,14 +49,37 @@
       "name": "Compute Ratio",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "parameters": {
         "assignments": {
           "assignments": [
-            { "id": "r1", "name": "spent_usd", "value": "={{ $json.spent_usd }}", "type": "number" },
-            { "id": "r2", "name": "daily_cap_usd", "value": "={{ $json.daily_cap_usd }}", "type": "number" },
-            { "id": "r3", "name": "ratio", "value": "={{ $json.daily_cap_usd > 0 ? ($json.spent_usd / $json.daily_cap_usd) : 0 }}", "type": "number" },
-            { "id": "r4", "name": "date", "value": "={{ $json.date }}", "type": "string" }
+            {
+              "id": "r1",
+              "name": "spent_usd",
+              "value": "={{ $json.spent_usd }}",
+              "type": "number"
+            },
+            {
+              "id": "r2",
+              "name": "daily_cap_usd",
+              "value": "={{ $json.daily_cap_usd }}",
+              "type": "number"
+            },
+            {
+              "id": "r3",
+              "name": "ratio",
+              "value": "={{ $json.daily_cap_usd > 0 ? ($json.spent_usd / $json.daily_cap_usd) : 0 }}",
+              "type": "number"
+            },
+            {
+              "id": "r4",
+              "name": "date",
+              "value": "={{ $json.date }}",
+              "type": "string"
+            }
           ]
         },
         "includeOtherFields": true,
@@ -50,20 +88,30 @@
     },
     {
       "id": "55555555-5555-4555-8555-555555555504",
-      "name": "≥100%?",
+      "name": "\u2265100%?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [900, 200],
+      "position": [
+        900,
+        200
+      ],
       "parameters": {
         "conditions": {
-          "options": { "version": 2, "caseSensitive": true, "typeValidation": "loose" },
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
           "combinator": "and",
           "conditions": [
             {
               "id": "h1",
               "leftValue": "={{ $json.ratio }}",
               "rightValue": 1.0,
-              "operator": { "type": "number", "operation": "gte" }
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
             }
           ]
         }
@@ -71,26 +119,39 @@
     },
     {
       "id": "55555555-5555-4555-8555-555555555505",
-      "name": "≥80%?",
+      "name": "\u226580%?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [900, 400],
+      "position": [
+        900,
+        400
+      ],
       "parameters": {
         "conditions": {
-          "options": { "version": 2, "caseSensitive": true, "typeValidation": "loose" },
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
           "combinator": "and",
           "conditions": [
             {
               "id": "w1",
               "leftValue": "={{ $json.ratio }}",
               "rightValue": 0.8,
-              "operator": { "type": "number", "operation": "gte" }
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
             },
             {
               "id": "w2",
               "leftValue": "={{ $json.ratio }}",
               "rightValue": 1.0,
-              "operator": { "type": "number", "operation": "lt" }
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
             }
           ]
         }
@@ -101,13 +162,18 @@
       "name": "Pushover: cap hit",
       "type": "n8n-nodes-base.pushover",
       "typeVersion": 1,
-      "position": [1120, 200],
+      "position": [
+        1120,
+        200
+      ],
       "parameters": {
         "userKey": "={{ $env.PUSHOVER_USER_KEY }}",
-        "title": "🚫 langgraph daily cap hit",
+        "title": "\ud83d\udeab langgraph daily cap hit",
         "message": "={{ '$' + $json.spent_usd.toFixed(2) + ' / $' + $json.daily_cap_usd.toFixed(2) + ' (' + Math.round($json.ratio * 100) + '%) on ' + $json.date }}",
         "priority": 1,
-        "additionalFields": { "sound": "siren" }
+        "additionalFields": {
+          "sound": "siren"
+        }
       }
     },
     {
@@ -115,7 +181,10 @@
       "name": "Zulip: 80% warning",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1120, 400],
+      "position": [
+        1120,
+        400
+      ],
       "parameters": {
         "method": "POST",
         "url": "http://zulip.collab.svc.cluster.local/api/v1/messages",
@@ -125,30 +194,101 @@
         "contentType": "form-urlencoded",
         "bodyParameters": {
           "parameters": [
-            { "name": "type", "value": "stream" },
-            { "name": "to", "value": "other" },
-            { "name": "topic", "value": "cost-alerts" },
-            { "name": "content", "value": "={{ '⚠️ daily spend at $' + $json.spent_usd.toFixed(2) + ' / $' + $json.daily_cap_usd.toFixed(2) + ' (' + Math.round($json.ratio * 100) + '%).' }}" }
+            {
+              "name": "type",
+              "value": "stream"
+            },
+            {
+              "name": "to",
+              "value": "other"
+            },
+            {
+              "name": "topic",
+              "value": "cost-alerts"
+            },
+            {
+              "name": "content",
+              "value": "={{ '\u26a0\ufe0f daily spend at $' + $json.spent_usd.toFixed(2) + ' / $' + $json.daily_cap_usd.toFixed(2) + ' (' + Math.round($json.ratio * 100) + '%).' }}"
+            }
           ]
         },
         "options": {
           "timeout": 30000,
-          "response": { "response": { "neverError": true } }
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       }
     }
   ],
   "connections": {
-    "Hourly": { "main": [[{ "node": "GET /admin/costs/today", "type": "main", "index": 0 }]] },
-    "GET /admin/costs/today": { "main": [[{ "node": "Compute Ratio", "type": "main", "index": 0 }]] },
-    "Compute Ratio": {
-      "main": [[
-        { "node": "≥100%?", "type": "main", "index": 0 },
-        { "node": "≥80%?", "type": "main", "index": 0 }
-      ]]
+    "Hourly": {
+      "main": [
+        [
+          {
+            "node": "GET /admin/costs/today",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "≥100%?": { "main": [[{ "node": "Pushover: cap hit", "type": "main", "index": 0 }], []] },
-    "≥80%?": { "main": [[{ "node": "Zulip: 80% warning", "type": "main", "index": 0 }], []] }
+    "GET /admin/costs/today": {
+      "main": [
+        [
+          {
+            "node": "Compute Ratio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Ratio": {
+      "main": [
+        [
+          {
+            "node": "\u2265100%?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "\u226580%?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\u2265100%?": {
+      "main": [
+        [
+          {
+            "node": "Pushover: cap hit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "\u226580%?": {
+      "main": [
+        [
+          {
+            "node": "Zulip: 80% warning",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "LgCostCapWtr05xx"
 }

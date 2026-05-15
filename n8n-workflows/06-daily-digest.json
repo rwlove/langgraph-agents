@@ -1,5 +1,5 @@
 {
-  "name": "langgraph-agents — daily digest",
+  "name": "langgraph-agents \u2014 daily digest",
   "active": false,
   "nodes": [
     {
@@ -7,10 +7,18 @@
       "name": "Daily 00:05 ET",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "parameters": {
         "rule": {
-          "interval": [{ "field": "cronExpression", "expression": "5 0 * * *" }]
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "5 0 * * *"
+            }
+          ]
         }
       },
       "notes": "n8n's scheduleTrigger runs in the container's TZ. The k8tz init sets America/New_York so this is 00:05 ET."
@@ -20,13 +28,20 @@
       "name": "GET /admin/tasks",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "parameters": {
         "method": "GET",
         "url": "http://langgraph-agents.ai.svc.cluster.local:8765/admin/tasks",
         "options": {
           "timeout": 60000,
-          "response": { "response": { "responseFormat": "json" } }
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
         }
       }
     },
@@ -35,10 +50,13 @@
       "name": "Format Digest",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "const tasks = Array.isArray($input.first().json) ? $input.first().json : [];\nconst yesterday = new Date(Date.now() - 86400000);\nconst yKey = yesterday.toISOString().slice(0, 10);\nconst byAgent = {};\nlet total = 0;\nfor (const t of tasks) {\n  const created = t.created_at || t.checkpoint_ts;\n  if (!created || created.slice(0, 10) !== yKey) continue;\n  const agent = t.agent || t.metadata?.agent || 'unknown';\n  byAgent[agent] = (byAgent[agent] || 0) + 1;\n  total++;\n}\nif (total === 0) {\n  return [{ json: { skip: true } }];\n}\nconst lines = [`## langgraph fleet — ${yKey}`, '', `**${total}** task(s) yesterday.`, ''];\nfor (const [agent, n] of Object.entries(byAgent).sort((a, b) => b[1] - a[1])) {\n  lines.push(`- ${agent}: ${n}`);\n}\nreturn [{ json: { skip: false, content: lines.join('\\n'), date: yKey } }];"
+        "jsCode": "const tasks = Array.isArray($input.first().json) ? $input.first().json : [];\nconst yesterday = new Date(Date.now() - 86400000);\nconst yKey = yesterday.toISOString().slice(0, 10);\nconst byAgent = {};\nlet total = 0;\nfor (const t of tasks) {\n  const created = t.created_at || t.checkpoint_ts;\n  if (!created || created.slice(0, 10) !== yKey) continue;\n  const agent = t.agent || t.metadata?.agent || 'unknown';\n  byAgent[agent] = (byAgent[agent] || 0) + 1;\n  total++;\n}\nif (total === 0) {\n  return [{ json: { skip: true } }];\n}\nconst lines = [`## langgraph fleet \u2014 ${yKey}`, '', `**${total}** task(s) yesterday.`, ''];\nfor (const [agent, n] of Object.entries(byAgent).sort((a, b) => b[1] - a[1])) {\n  lines.push(`- ${agent}: ${n}`);\n}\nreturn [{ json: { skip: false, content: lines.join('\\n'), date: yKey } }];"
       }
     },
     {
@@ -46,17 +64,27 @@
       "name": "Skip empty?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [900, 300],
+      "position": [
+        900,
+        300
+      ],
       "parameters": {
         "conditions": {
-          "options": { "version": 2, "caseSensitive": true, "typeValidation": "strict" },
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
           "combinator": "and",
           "conditions": [
             {
               "id": "k1",
               "leftValue": "={{ $json.skip }}",
               "rightValue": false,
-              "operator": { "type": "boolean", "operation": "equals" }
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
             }
           ]
         }
@@ -67,7 +95,10 @@
       "name": "Post to Zulip #other",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1120, 220],
+      "position": [
+        1120,
+        220
+      ],
       "parameters": {
         "method": "POST",
         "url": "http://zulip.collab.svc.cluster.local/api/v1/messages",
@@ -77,29 +108,84 @@
         "contentType": "form-urlencoded",
         "bodyParameters": {
           "parameters": [
-            { "name": "type", "value": "stream" },
-            { "name": "to", "value": "other" },
-            { "name": "topic", "value": "={{ 'digest-' + $json.date }}" },
-            { "name": "content", "value": "={{ $json.content }}" }
+            {
+              "name": "type",
+              "value": "stream"
+            },
+            {
+              "name": "to",
+              "value": "other"
+            },
+            {
+              "name": "topic",
+              "value": "={{ 'digest-' + $json.date }}"
+            },
+            {
+              "name": "content",
+              "value": "={{ $json.content }}"
+            }
           ]
         },
         "options": {
           "timeout": 30000,
-          "response": { "response": { "neverError": true } }
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       }
     }
   ],
   "connections": {
-    "Daily 00:05 ET": { "main": [[{ "node": "GET /admin/tasks", "type": "main", "index": 0 }]] },
-    "GET /admin/tasks": { "main": [[{ "node": "Format Digest", "type": "main", "index": 0 }]] },
-    "Format Digest": { "main": [[{ "node": "Skip empty?", "type": "main", "index": 0 }]] },
+    "Daily 00:05 ET": {
+      "main": [
+        [
+          {
+            "node": "GET /admin/tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /admin/tasks": {
+      "main": [
+        [
+          {
+            "node": "Format Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Digest": {
+      "main": [
+        [
+          {
+            "node": "Skip empty?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Skip empty?": {
       "main": [
-        [{ "node": "Post to Zulip #other", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Post to Zulip #other",
+            "type": "main",
+            "index": 0
+          }
+        ],
         []
       ]
     }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "LgDailyDigest06x"
 }

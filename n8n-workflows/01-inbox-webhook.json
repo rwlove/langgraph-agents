@@ -1,5 +1,5 @@
 {
-  "name": "langgraph-agents — inbox webhook",
+  "name": "langgraph-agents \u2014 inbox webhook",
   "active": false,
   "nodes": [
     {
@@ -7,7 +7,10 @@
       "name": "Inbox Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "webhookId": "lg-inbox-relay",
       "parameters": {
         "httpMethod": "POST",
@@ -21,7 +24,10 @@
       "name": "Build InboxRequest",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "parameters": {
         "assignments": {
           "assignments": [
@@ -60,14 +66,20 @@
       "name": "POST /inbox",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "parameters": {
         "method": "POST",
         "url": "http://langgraph-agents.ai.svc.cluster.local:8765/inbox",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -75,7 +87,12 @@
         "jsonBody": "={{ JSON.stringify({ task_id: $json.task_id, source: $json.source, content: $json.content, user: $json.user }) }}",
         "options": {
           "timeout": 60000,
-          "response": { "response": { "neverError": true, "responseFormat": "json" } }
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
         }
       }
     },
@@ -84,7 +101,10 @@
       "name": "Respond 202",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [900, 300],
+      "position": [
+        900,
+        300
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ task_id: $('Build InboxRequest').first().json.task_id, status: $json.status || 'accepted' }) }}",
@@ -96,14 +116,41 @@
   ],
   "connections": {
     "Inbox Webhook": {
-      "main": [[{ "node": "Build InboxRequest", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Build InboxRequest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Build InboxRequest": {
-      "main": [[{ "node": "POST /inbox", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "POST /inbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "POST /inbox": {
-      "main": [[{ "node": "Respond 202", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Respond 202",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "LgInboxWebhook01"
 }

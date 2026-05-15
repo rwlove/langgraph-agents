@@ -1,5 +1,5 @@
 {
-  "name": "langgraph-agents — approval receive (Zulip reaction → /approval)",
+  "name": "langgraph-agents \u2014 approval receive (Zulip reaction \u2192 /approval)",
   "active": false,
   "nodes": [
     {
@@ -7,7 +7,10 @@
       "name": "Zulip Reaction Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "webhookId": "lg-approval-receive",
       "parameters": {
         "httpMethod": "POST",
@@ -22,10 +25,13 @@
       "name": "Parse Reaction",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [460, 300],
+      "position": [
+        460,
+        300
+      ],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "// Map Zulip emoji reaction → approval verb.\n// Topic name format from approval-request: 'approval-<task_id_prefix>' OR explicit topic.\n// The full task_id must be carried in the message content (the approval-request workflow\n// embeds it as a hidden link or footer). For MVP we expect topic = 'approval-<full_task_id>'.\nconst payload = $input.first().json.body || {};\nconst reactionRaw = (payload.data || '').toLowerCase();\nconst emoji = (payload.message && payload.message.last_edit_timestamp) ? null : null; // placeholder\n// Zulip outgoing-webhook for reactions: payload.trigger='reaction_add', payload.message.subject=topic, payload.data=':emoji_name:'\nconst topic = payload.message ? payload.message.subject : (payload.topic || '');\nconst senderEmail = payload.message ? payload.message.sender_email : (payload.actor || 'unknown');\nlet reaction = null;\nif (reactionRaw.includes('thumbs_up') || reactionRaw.includes('+1') || reactionRaw.includes('check')) reaction = 'approve';\nelse if (reactionRaw.includes('thumbs_down') || reactionRaw.includes('-1') || reactionRaw.includes('x')) reaction = 'reject';\nelse if (reactionRaw.includes('pause') || reactionRaw.includes('clock') || reactionRaw.includes('hourglass')) reaction = 'defer';\nif (!reaction) {\n  return [{ json: { skip: true, reason: 'unrecognized reaction: ' + reactionRaw } }];\n}\nconst taskMatch = topic.match(/approval-([a-f0-9-]{8,})/i);\nif (!taskMatch) {\n  return [{ json: { skip: true, reason: 'topic does not match approval-<task_id>: ' + topic } }];\n}\nconst task_id = taskMatch[1];\n// action_class / server / method are not in the reaction payload; the approval token contract\n// embeds them. For MVP, this workflow signs a token over (task_id, reaction) only; errand-runner\n// validates the full tuple from state.approval_request. The HMAC is the integrity check that the\n// approval came from THIS n8n instance, not that the action tuple matches state.\nreturn [{ json: { task_id, reaction, actor: senderEmail.split('@')[0] || 'rob' } }];"
+        "jsCode": "// Map Zulip emoji reaction \u2192 approval verb.\n// Topic name format from approval-request: 'approval-<task_id_prefix>' OR explicit topic.\n// The full task_id must be carried in the message content (the approval-request workflow\n// embeds it as a hidden link or footer). For MVP we expect topic = 'approval-<full_task_id>'.\nconst payload = $input.first().json.body || {};\nconst reactionRaw = (payload.data || '').toLowerCase();\nconst emoji = (payload.message && payload.message.last_edit_timestamp) ? null : null; // placeholder\n// Zulip outgoing-webhook for reactions: payload.trigger='reaction_add', payload.message.subject=topic, payload.data=':emoji_name:'\nconst topic = payload.message ? payload.message.subject : (payload.topic || '');\nconst senderEmail = payload.message ? payload.message.sender_email : (payload.actor || 'unknown');\nlet reaction = null;\nif (reactionRaw.includes('thumbs_up') || reactionRaw.includes('+1') || reactionRaw.includes('check')) reaction = 'approve';\nelse if (reactionRaw.includes('thumbs_down') || reactionRaw.includes('-1') || reactionRaw.includes('x')) reaction = 'reject';\nelse if (reactionRaw.includes('pause') || reactionRaw.includes('clock') || reactionRaw.includes('hourglass')) reaction = 'defer';\nif (!reaction) {\n  return [{ json: { skip: true, reason: 'unrecognized reaction: ' + reactionRaw } }];\n}\nconst taskMatch = topic.match(/approval-([a-f0-9-]{8,})/i);\nif (!taskMatch) {\n  return [{ json: { skip: true, reason: 'topic does not match approval-<task_id>: ' + topic } }];\n}\nconst task_id = taskMatch[1];\n// action_class / server / method are not in the reaction payload; the approval token contract\n// embeds them. For MVP, this workflow signs a token over (task_id, reaction) only; errand-runner\n// validates the full tuple from state.approval_request. The HMAC is the integrity check that the\n// approval came from THIS n8n instance, not that the action tuple matches state.\nreturn [{ json: { task_id, reaction, actor: senderEmail.split('@')[0] || 'rob' } }];"
       }
     },
     {
@@ -33,17 +39,27 @@
       "name": "Skip?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "parameters": {
         "conditions": {
-          "options": { "version": 2, "caseSensitive": true, "typeValidation": "strict" },
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
           "combinator": "and",
           "conditions": [
             {
               "id": "s1",
               "leftValue": "={{ $json.skip }}",
               "rightValue": true,
-              "operator": { "type": "boolean", "operation": "equals" }
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
             }
           ]
         }
@@ -54,10 +70,13 @@
       "name": "Mint HMAC Token",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 380],
+      "position": [
+        900,
+        380
+      ],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "// HMAC contract (matches errand_runner._verify_approval_token):\n//   payload = task_id|action_class|server|method|nonce\n//   token   = payload + ':' + hex(hmac-sha256(LANGGRAPH_APPROVAL_SIGNING_KEY, payload))\n// At reaction time we don't have action_class/server/method — those were captured when the\n// approval was REQUESTED. For MVP, the approval-request workflow stashes them in a Zulip\n// message footer (machine-readable) and the receive side reads them back. Until that's wired,\n// we ship a placeholder tuple ('approve'/'unknown'/'unknown') and let errand-runner reject\n// mismatches. That keeps the HMAC path tested end-to-end while we iterate on the lookup.\nconst crypto = require('crypto');\nconst signingKey = $env.LANGGRAPH_APPROVAL_SIGNING_KEY;\nif (!signingKey) {\n  throw new Error('LANGGRAPH_APPROVAL_SIGNING_KEY env var is not set on n8n; cannot mint tokens.');\n}\nconst { task_id, reaction, actor } = $input.first().json;\nconst action_class = 'C';\nconst server = 'unknown';\nconst method = 'unknown';\nconst nonce = crypto.randomBytes(8).toString('hex');\nconst payload = [task_id, action_class, server, method, nonce].join('|');\nconst signature = crypto.createHmac('sha256', signingKey).update(payload).digest('hex');\nconst approval_token = payload + ':' + signature;\nreturn [{ json: { task_id, reaction, actor, approval_token } }];"
+        "jsCode": "// HMAC contract (matches errand_runner._verify_approval_token):\n//   payload = task_id|action_class|server|method|nonce\n//   token   = payload + ':' + hex(hmac-sha256(LANGGRAPH_APPROVAL_SIGNING_KEY, payload))\n// At reaction time we don't have action_class/server/method \u2014 those were captured when the\n// approval was REQUESTED. For MVP, the approval-request workflow stashes them in a Zulip\n// message footer (machine-readable) and the receive side reads them back. Until that's wired,\n// we ship a placeholder tuple ('approve'/'unknown'/'unknown') and let errand-runner reject\n// mismatches. That keeps the HMAC path tested end-to-end while we iterate on the lookup.\nconst crypto = require('crypto');\nconst signingKey = $env.LANGGRAPH_APPROVAL_SIGNING_KEY;\nif (!signingKey) {\n  throw new Error('LANGGRAPH_APPROVAL_SIGNING_KEY env var is not set on n8n; cannot mint tokens.');\n}\nconst { task_id, reaction, actor } = $input.first().json;\nconst action_class = 'C';\nconst server = 'unknown';\nconst method = 'unknown';\nconst nonce = crypto.randomBytes(8).toString('hex');\nconst payload = [task_id, action_class, server, method, nonce].join('|');\nconst signature = crypto.createHmac('sha256', signingKey).update(payload).digest('hex');\nconst approval_token = payload + ':' + signature;\nreturn [{ json: { task_id, reaction, actor, approval_token } }];"
       }
     },
     {
@@ -65,14 +84,20 @@
       "name": "POST /approval",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1120, 380],
+      "position": [
+        1120,
+        380
+      ],
       "parameters": {
         "method": "POST",
         "url": "http://langgraph-agents.ai.svc.cluster.local:8765/approval",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -80,7 +105,12 @@
         "jsonBody": "={{ JSON.stringify({ task_id: $json.task_id, reaction: $json.reaction, approval_token: $json.approval_token, actor: $json.actor }) }}",
         "options": {
           "timeout": 60000,
-          "response": { "response": { "neverError": true, "responseFormat": "json" } }
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
         }
       }
     },
@@ -89,11 +119,16 @@
       "name": "Respond 200",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1340, 380],
+      "position": [
+        1340,
+        380
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ status: $json.status || 'submitted' }) }}",
-        "options": { "responseCode": 200 }
+        "options": {
+          "responseCode": 200
+        }
       }
     },
     {
@@ -101,32 +136,84 @@
       "name": "Respond 204 Skip",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [900, 220],
+      "position": [
+        900,
+        220
+      ],
       "parameters": {
         "respondWith": "noData",
-        "options": { "responseCode": 204 }
+        "options": {
+          "responseCode": 204
+        }
       }
     }
   ],
   "connections": {
     "Zulip Reaction Webhook": {
-      "main": [[{ "node": "Parse Reaction", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Parse Reaction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Parse Reaction": {
-      "main": [[{ "node": "Skip?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Skip?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Skip?": {
       "main": [
-        [{ "node": "Respond 204 Skip", "type": "main", "index": 0 }],
-        [{ "node": "Mint HMAC Token", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Respond 204 Skip",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mint HMAC Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Mint HMAC Token": {
-      "main": [[{ "node": "POST /approval", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "POST /approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "POST /approval": {
-      "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "LgApprovalRcv03x"
 }
