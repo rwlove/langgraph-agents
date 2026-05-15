@@ -11,6 +11,7 @@ specialists existing yet.
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -46,7 +47,7 @@ def _route_after_triage(state: FleetState) -> AgentId | str:
     return target
 
 
-def build_fleet_graph(checkpointer: BaseCheckpointSaver | None = None) -> Any:
+def build_fleet_graph(checkpointer: BaseCheckpointSaver[Any] | None = None) -> Any:
     """Build + compile the fleet graph.
 
     Pass a checkpointer in production (PostgresSaver). Pass None in tests to
@@ -64,12 +65,12 @@ def build_fleet_graph(checkpointer: BaseCheckpointSaver | None = None) -> Any:
     builder.add_edge(START, "triager")
 
     # All specialist targets route to the stub in phase 1.
-    route_map: dict[str, str] = {
+    route_map: dict[Hashable, str] = {
         agent: "_pending"
         for agent in ALL_AGENT_IDS
         if agent != "triager"
     }
-    route_map[END] = END  # type: ignore[index]
+    route_map[END] = END
 
     builder.add_conditional_edges("triager", _route_after_triage, route_map)
     builder.add_edge("_pending", END)

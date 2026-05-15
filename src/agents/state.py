@@ -7,10 +7,15 @@ JSON-parse time, not at runtime.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
 
 # ---- Typed enums ----
 
@@ -164,4 +169,4 @@ class FleetState(BaseModel):
     activity_log_entries: list[ActivityLogEntry] = Field(default_factory=list)
 
     # --- meta ---
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=_now_utc)

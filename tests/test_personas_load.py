@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agents.personas import invalidate_cache, load_identity, load_persona
+from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS
 
 
@@ -30,7 +31,6 @@ def test_load_persona_for_every_agent(temp_vault: Path) -> None:
 def test_load_persona_missing_dir_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An agent without a workspace dir is a deployment bug — fail loudly."""
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    from agents.settings import get_settings
     get_settings.cache_clear()
     invalidate_cache()
 

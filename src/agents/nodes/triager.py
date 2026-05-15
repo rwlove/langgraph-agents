@@ -52,7 +52,7 @@ def triager_node(state: FleetState) -> dict[str, Any]:
         ),
     ]
 
-    decision: TriageDecision = llm.invoke(messages)  # type: ignore[assignment]
+    decision: TriageDecision = llm.invoke(messages)
 
     return {
         "triage": decision,

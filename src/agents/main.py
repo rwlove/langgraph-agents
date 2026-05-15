@@ -10,10 +10,15 @@ from __future__ import annotations
 
 import logging
 import sys
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any
 
+import uvicorn
 from fastapi import FastAPI
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from agents.api import admin, approval, chat_completions, health, inbox
 from agents.graphs.fleet import build_fleet_graph
@@ -22,35 +27,34 @@ from agents.settings import get_settings
 logger = logging.getLogger("agents")
 
 
-async def _build_checkpointer() -> object:
+async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]:
     """Return a checkpointer suitable for the runtime environment.
 
-    Production: Postgres. Dev (no Postgres URL set to a reachable host):
-    in-memory.
+    Production: Postgres. Dev (no reachable Postgres): in-memory.
+
+    The Postgres saver is an async context manager; entering it via the
+    AsyncExitStack ensures the connection pool is cleaned up on shutdown.
     """
     settings = get_settings()
-    if settings.postgres_url.startswith("postgresql://localhost"):
-        # Local-dev convenience: use in-memory unless we explicitly know
-        # Postgres is up. Avoids "I want to smoke-test against ollama and
-        # don't have a DB running" friction.
-        try:
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-            saver = AsyncPostgresSaver.from_conn_string(settings.postgres_url)
-            await saver.setup()
-            logger.info("using Postgres checkpointer at %s", settings.postgres_url)
-            return saver
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Postgres checkpointer unavailable (%s); using MemorySaver", exc)
-            from langgraph.checkpoint.memory import MemorySaver
-
-            return MemorySaver()
-    else:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-        saver = AsyncPostgresSaver.from_conn_string(settings.postgres_url)
+    async def _try_postgres() -> BaseCheckpointSaver[Any]:
+        cm = AsyncPostgresSaver.from_conn_string(settings.postgres_url)
+        saver = await stack.enter_async_context(cm)
         await saver.setup()
         return saver
+
+    if settings.postgres_url.startswith("postgresql://localhost"):
+        # Local-dev convenience: try Postgres but fall back to memory if it's
+        # not actually running.
+        try:
+            saver = await _try_postgres()
+            logger.info("using Postgres checkpointer at %s", settings.postgres_url)
+            return saver
+        except Exception as exc:
+            logger.warning("Postgres checkpointer unavailable (%s); using MemorySaver", exc)
+            return MemorySaver()
+
+    return await _try_postgres()
 
 
 @asynccontextmanager
@@ -63,13 +67,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     logger.info("starting langgraph-agents, vault_root=%s", settings.vault_root)
 
-    checkpointer = await _build_checkpointer()
-    app.state.graph = build_fleet_graph(checkpointer=checkpointer)
-    logger.info("fleet graph compiled; entrypoint=triager")
-
-    yield
-
-    logger.info("shutting down")
+    async with AsyncExitStack() as stack:
+        checkpointer = await _build_checkpointer(stack)
+        app.state.graph = build_fleet_graph(checkpointer=checkpointer)
+        logger.info("fleet graph compiled; entrypoint=triager")
+        yield
+        logger.info("shutting down")
 
 
 app = FastAPI(
@@ -88,9 +91,7 @@ app.include_router(chat_completions.router)
 
 def run() -> None:
     """Entrypoint for `python -m agents` and the project script."""
-    import uvicorn
-
-    uvicorn.run("agents.main:app", host="0.0.0.0", port=8765, log_level="info")  # noqa: S104
+    uvicorn.run("agents.main:app", host="0.0.0.0", port=8765, log_level="info")
 
 
 if __name__ == "__main__":

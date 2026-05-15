@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import sys
 
 import agents.nodes
 
@@ -30,8 +31,6 @@ def test_health_tracker_module_does_not_import_anthropic() -> None:
         # become meaningful in phase 8 when the module is authored.
         return
 
-    # Import in isolation and check sys.modules doesn't gain an anthropic key.
-    import sys
     before = set(sys.modules)
     importlib.import_module("agents.nodes.health_tracker")
     after = set(sys.modules)
