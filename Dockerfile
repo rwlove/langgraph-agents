@@ -13,8 +13,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
 
 WORKDIR /build
 
-# Copy lockfile + manifest first for layer caching
-COPY pyproject.toml uv.lock* ./
+# Copy metadata + lockfile first for layer caching. README.md is referenced
+# by pyproject.toml (project.readme); hatchling reads it during build.
+COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
