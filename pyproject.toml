@@ -1,0 +1,101 @@
+[project]
+name = "langgraph-agents"
+version = "0.1.0"
+description = "Multi-agent fleet for Rob's homelab — LangGraph runtime over ollama + Claude API, integrates with Zulip/Pushover/n8n/MCP gateway."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Rob Love" }]
+
+dependencies = [
+    # Graph runtime + durable state
+    "langgraph>=0.2.50",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "langchain-core>=0.3.0",
+    "langchain-ollama>=0.2.0",
+    "langchain-anthropic>=0.3.0",
+
+    # HTTP surface
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+
+    # State + validation
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+
+    # Vault content + frontmatter
+    "python-frontmatter>=1.1.0",
+
+    # Postgres driver (for checkpointer + pgvector)
+    "psycopg[binary,pool]>=3.2.0",
+    "pgvector>=0.3.0",
+
+    # HTTP client for MCP gateway calls
+    "httpx>=0.28.0",
+
+    # Filesystem watch (skill auto-reload on vault changes)
+    "watchdog>=6.0.0",
+
+    # Structured logging
+    "structlog>=24.4.0",
+
+    # Observability
+    "langfuse>=2.55.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "types-pyyaml",
+]
+
+[project.scripts]
+langgraph-agents = "agents.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agents"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "RUF", # ruff-specific
+    "PL",  # pylint
+]
+ignore = [
+    "PLR0913", # too many arguments
+    "PLR2004", # magic value comparison (annoying for HTTP codes)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR2004", "S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+# LangGraph + LangChain types are not always strict-clean; relax for the deps
+[[tool.mypy.overrides]]
+module = ["langgraph.*", "langchain_core.*", "langchain_ollama.*", "frontmatter.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

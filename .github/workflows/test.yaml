@@ -1,0 +1,32 @@
+---
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.5.*"
+
+      - name: setup python
+        run: uv python install 3.12
+
+      - name: install deps
+        run: uv sync --frozen
+
+      - name: lint
+        run: uv run ruff check .
+
+      - name: typecheck
+        run: uv run mypy src
+
+      - name: tests
+        run: uv run pytest --cov=src/agents --cov-report=term

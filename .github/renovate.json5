@@ -1,0 +1,21 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    ":semanticCommits",
+    ":timezone(America/New_York)",
+    ":separateMultipleMajorReleases",
+  ],
+  // Match home-ops convention: don't auto-merge new agent-system components
+  packageRules: [
+    {
+      matchPackagePatterns: ["^langgraph", "^langchain", "^anthropic", "^langfuse"],
+      automerge: false,
+      labels: ["agent-system"],
+    },
+  ],
+  // Keep weekly cadence; agent-system stability matters more than freshness
+  schedule: ["before 6am on monday"],
+  prHourlyLimit: 0,
+  prConcurrentLimit: 10,
+}
