@@ -33,6 +33,7 @@ AgentId = Literal[
     "ml-tuner",
     "health-tracker",
     "property-coordinator",
+    "doc-writer",
 ]
 
 ALL_AGENT_IDS: tuple[AgentId, ...] = (
@@ -49,6 +50,7 @@ ALL_AGENT_IDS: tuple[AgentId, ...] = (
     "ml-tuner",
     "health-tracker",
     "property-coordinator",
+    "doc-writer",
 )
 
 Domain = Literal[

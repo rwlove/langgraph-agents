@@ -166,6 +166,7 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
     "property-coordinator": frozenset(
         _READ_ONLY_PAPERLESS + _READ_ONLY_SEARXNG + _READ_ONLY_IMMICH
     ),
+    "doc-writer": frozenset(_READ_ONLY_SEARXNG),  # for verifying upstream terminology
 }
 
 

@@ -16,7 +16,7 @@ from agents.settings import Settings, get_settings
 
 
 def _populate_temp_vault(root: Path) -> None:
-    """Lay down a minimal vault structure with 13 stub workspaces + shared."""
+    """Lay down a minimal vault structure with 14 stub workspaces + shared."""
     workspaces = root / "agents" / "workspaces"
     shared = workspaces / "_shared"
     shared.mkdir(parents=True)
@@ -27,7 +27,7 @@ def _populate_temp_vault(root: Path) -> None:
         "triager", "reporter", "note-maker", "researcher", "coder",
         "errand-runner", "supervisor", "reviewer", "homelab-engineer",
         "smart-home-engineer", "ml-tuner", "health-tracker",
-        "property-coordinator",
+        "property-coordinator", "doc-writer",
     ]
     for agent in agent_ids:
         d = workspaces / agent
