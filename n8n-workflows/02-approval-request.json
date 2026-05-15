@@ -143,7 +143,13 @@
           }
         }
       },
-      "notes": "Credential `Zulip - approval-broker bot` (httpBasicAuth: bot_email / api_key)."
+      "notes": "Credential `Zulip - approval-broker bot` (httpBasicAuth: bot_email / api_key).",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "LgZulipBrokerCred",
+          "name": "Zulip - approval-broker bot"
+        }
+      }
     },
     {
       "id": "22222222-2222-4222-8222-222222222204",
@@ -196,7 +202,13 @@
           "sound": "siren"
         }
       },
-      "notes": "Credential `Pushover - langgraph-agents` (App token from 1Password langgraph-agents/PUSHOVER_APP_TOKEN). User key set via PUSHOVER_USER_KEY env."
+      "notes": "Credential `Pushover - langgraph-agents` (App token from 1Password langgraph-agents/PUSHOVER_APP_TOKEN). User key set via PUSHOVER_USER_KEY env.",
+      "credentials": {
+        "pushoverApi": {
+          "id": "LgPushoverCred1x",
+          "name": "Pushover - langgraph-agents"
+        }
+      }
     },
     {
       "id": "22222222-2222-4222-8222-222222222206",

@@ -134,6 +134,12 @@
             }
           }
         }
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "LgZulipBrokerCred",
+          "name": "Zulip - approval-broker bot"
+        }
       }
     }
   ],
