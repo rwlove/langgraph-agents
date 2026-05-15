@@ -24,7 +24,7 @@ from agents.state import FleetState
 from agents.tools.obsidian import write_draft
 
 _AGENT_ID = "coder"
-_MODEL = "qwen2.5:14b"
+_MODEL = "qwen2.5:7b"
 _TEMPERATURE = 0.2
 
 PatchFormat = Literal["unified-diff", "full-file"]

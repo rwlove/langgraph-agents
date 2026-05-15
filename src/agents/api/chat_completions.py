@@ -74,18 +74,18 @@ async def list_models() -> dict[str, Any]:
 
 _PER_AGENT_MODEL: dict[str, str] = {
     "triager": "qwen2.5:7b",
-    "reporter": "qwen2.5:14b",
-    "note-maker": "qwen2.5:14b",
-    "researcher": "qwen2.5:14b",
-    "coder": "qwen2.5:14b",
-    "errand-runner": "qwen2.5:14b",
-    "supervisor": "qwen2.5:14b",
-    "reviewer": "qwen2.5:14b",
-    "homelab-engineer": "qwen2.5:14b",
-    "smart-home-engineer": "qwen2.5:14b",
-    "ml-tuner": "qwen2.5:14b",
-    "health-tracker": "qwen2.5:14b",  # local-only enforced via persona + no provider switch
-    "property-coordinator": "qwen2.5:14b",
+    "reporter": "qwen2.5:7b",
+    "note-maker": "qwen2.5:7b",
+    "researcher": "qwen2.5:7b",
+    "coder": "qwen2.5:7b",
+    "errand-runner": "qwen2.5:7b",
+    "supervisor": "qwen2.5:7b",
+    "reviewer": "qwen2.5:7b",
+    "homelab-engineer": "qwen2.5:7b",
+    "smart-home-engineer": "qwen2.5:7b",
+    "ml-tuner": "qwen2.5:7b",
+    "health-tracker": "qwen2.5:7b",  # local-only enforced via persona + no provider switch
+    "property-coordinator": "qwen2.5:7b",
 }
 
 
@@ -110,7 +110,7 @@ def _to_lc_messages(messages: list[ChatMessage], persona: str) -> list[Any]:
 def _make_llm(agent_id: AgentId, temperature: float | None) -> ChatOllama:
     settings = get_settings()
     return ChatOllama(
-        model=_PER_AGENT_MODEL.get(agent_id, "qwen2.5:14b"),
+        model=_PER_AGENT_MODEL.get(agent_id, "qwen2.5:7b"),
         base_url=settings.ollama_base_url.removesuffix("/v1"),
         temperature=0.2 if temperature is None else temperature,
     )

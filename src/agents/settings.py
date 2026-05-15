@@ -40,6 +40,19 @@ class Settings(BaseSettings):
         default=False,
         description="Master switch. Even if set, health-tracker never uses Claude.",
     )
+    triager_model: str = Field(
+        default="qwen2.5:7b",
+        description="Model for the triager. Small + fast.",
+    )
+    specialist_model: str = Field(
+        default="qwen2.5:7b",
+        description=(
+            "Default model for content-producing specialists "
+            "(reporter/note-maker/researcher/coder/etc). "
+            "Defaults to 7b to fit the P40's available VRAM headroom. "
+            "Flip to qwen2.5:14b after a GPU upgrade."
+        ),
+    )
 
     # --- state + memory ---
     postgres_url: str = Field(

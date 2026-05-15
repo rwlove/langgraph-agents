@@ -23,7 +23,7 @@ from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS, AgentId, FleetState
 
 _AGENT_ID = "supervisor"
-_MODEL = "qwen2.5:14b"
+_MODEL = "qwen2.5:7b"
 _TEMPERATURE = 0.1
 
 _CASCADE_LIMIT = 2

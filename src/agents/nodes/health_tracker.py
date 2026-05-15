@@ -26,7 +26,7 @@ from agents.state import FleetState
 from agents.tools.obsidian import write_draft
 
 _AGENT_ID = "health-tracker"
-_MODEL = "qwen2.5:14b"
+_MODEL = "qwen2.5:7b"
 _TEMPERATURE = 0.2
 
 NoteKind = Literal["visit", "metric", "rx", "symptom", "general"]

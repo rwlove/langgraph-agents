@@ -29,7 +29,7 @@ from agents.state import ActionClass, AgentId, FleetState
 from agents.tools.mcp import MCPGatewayClient, MCPPermissionError, is_allowed
 
 _AGENT_ID: AgentId = "errand-runner"
-_MODEL = "qwen2.5:14b"
+_MODEL = "qwen2.5:7b"
 _TEMPERATURE = 0.0  # deterministic — we're verifying + executing, not generating
 
 Outcome = Literal["executed", "rejected", "preflight-failed", "no-approval"]

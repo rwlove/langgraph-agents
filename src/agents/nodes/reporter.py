@@ -22,7 +22,7 @@ from agents.state import FleetState
 from agents.tools.obsidian import WriteResult, _write_atomic
 
 _AGENT_ID = "reporter"
-_MODEL = "qwen2.5:14b"
+_MODEL = "qwen2.5:7b"
 _TEMPERATURE = 0.2
 
 

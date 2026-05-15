@@ -20,7 +20,7 @@ from agents.state import ActionClass, FleetState
 from agents.tools.obsidian import write_draft
 
 _AGENT_ID = "smart-home-engineer"
-_MODEL = "qwen2.5:14b"
+_MODEL = "qwen2.5:7b"
 _TEMPERATURE = 0.2
 
 

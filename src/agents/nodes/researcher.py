@@ -24,7 +24,7 @@ from agents.state import FleetState
 from agents.tools.obsidian import VaultGrepHit, grep_vault_memory, write_finding
 
 _AGENT_ID = "researcher"
-_MODEL = "qwen2.5:14b"
+_MODEL = "qwen2.5:7b"
 _TEMPERATURE = 0.2
 
 Confidence = Literal["high", "medium", "low", "inconclusive"]
