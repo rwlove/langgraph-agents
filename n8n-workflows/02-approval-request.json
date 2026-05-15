@@ -89,7 +89,7 @@
             {
               "id": "na",
               "name": "zulip_message",
-              "value": "={{ '**Approval needed**\\n\\nAgent: ' + $json.body.agent + '\\nAction: `' + $json.body.server + '.' + $json.body.method + '` (class ' + $json.body.action_class + ')\\n\\n' + $json.body.summary + '\\n\\nReact \ud83d\udc4d approve / \ud83d\udc4e reject / \u23f8 defer' }}",
+              "value": "={{ '**Approval needed**\\n\\nAgent: ' + $json.body.agent + '\\nAction: `' + $json.body.server + '.' + $json.body.method + '` (class ' + $json.body.action_class + ')\\n\\n' + $json.body.summary + '\\n\\nReact \ud83d\udc4d approve / \ud83d\udc4e reject / \u23f8 defer\\n\\n---\\n`lg-approval-meta task_id=' + $json.body.task_id + ' class=' + $json.body.action_class + ' server=' + $json.body.server + ' method=' + $json.body.method + '`' }}",
               "type": "string"
             }
           ]
