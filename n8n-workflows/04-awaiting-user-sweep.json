@@ -1,0 +1,136 @@
+{
+  "name": "langgraph-agents \u2014 awaiting-user sweep",
+  "active": false,
+  "nodes": [
+    {
+      "id": "44444444-4444-4444-8444-444444444401",
+      "name": "Every 5 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "44444444-4444-4444-8444-444444444402",
+      "name": "GET /admin/tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://langgraph-agents.ai.svc.cluster.local:8765/admin/tasks",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "44444444-4444-4444-8444-444444444403",
+      "name": "Tier each paused task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Filter tasks that are paused awaiting user, compute age, decide tier.\n// Source-of-truth for paused tasks is the checkpointer; we treat any task with\n// status='awaiting_user' (or interrupt state) as a candidate.\nconst now = Date.now();\nconst tasks = Array.isArray($input.first().json) ? $input.first().json : [];\nconst out = [];\nfor (const t of tasks) {\n  const status = t.status || (t.next || []).length ? 'awaiting_user' : null;\n  if (status !== 'awaiting_user') continue;\n  const createdMs = t.created_at ? Date.parse(t.created_at) : (t.checkpoint_ts ? Date.parse(t.checkpoint_ts) : now);\n  const ageMin = (now - createdMs) / 60000;\n  let tier = null;\n  if (ageMin >= 60 * 24 * 7) tier = '7d';\n  else if (ageMin >= 60 * 4) tier = '4h';\n  else if (ageMin >= 30) tier = '30min';\n  if (!tier) continue; // not aged enough yet\n  if (t.timeout_tier === tier) continue; // already at this tier\n  out.push({ json: { task_id: t.task_id || t.thread_id || t.id, tier, age_min: Math.round(ageMin) } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "44444444-4444-4444-8444-444444444404",
+      "name": "POST timeout-tier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://langgraph-agents.ai.svc.cluster.local:8765/admin/tasks/{{ $json.task_id }}/timeout-tier",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tier: $json.tier }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 min": {
+      "main": [
+        [
+          {
+            "node": "GET /admin/tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /admin/tasks": {
+      "main": [
+        [
+          {
+            "node": "Tier each paused task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tier each paused task": {
+      "main": [
+        [
+          {
+            "node": "POST timeout-tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "LgAwaitingSwp04x"
+}
