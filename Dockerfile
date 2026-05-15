@@ -53,5 +53,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
 CMD ["uvicorn", "agents.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8765", \
-     "--workers", "1", \
-     "--log-config", "/app/src/agents/logging.json"]
+     "--workers", "1"]
