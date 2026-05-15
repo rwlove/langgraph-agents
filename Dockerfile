@@ -11,7 +11,12 @@ ENV PYTHONUNBUFFERED=1 \
 # uv for fast deps + reproducible installs
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
 
-WORKDIR /build
+# Build the venv at /app (not /build) so the shebangs uv writes into the
+# venv binaries — which hardcode the absolute path — match the runtime
+# stage's path. Otherwise COPY-ing /build/.venv to /app/.venv leaves
+# shebangs pointing at /build/.venv/bin/python which doesn't exist at
+# runtime.
+WORKDIR /app
 
 # Copy metadata + lockfile first for layer caching. README.md is referenced
 # by pyproject.toml (project.readme); hatchling reads it during build.
@@ -36,7 +41,7 @@ RUN groupadd --gid 1000 app && \
     useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash app
 
 WORKDIR /app
-COPY --from=builder --chown=app:app /build/.venv /app/.venv
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app src/ /app/src/
 
 USER app
