@@ -25,8 +25,7 @@ import tempfile
 PUSHOVER_CRED_ID = "LgPushoverCred1x"
 PUSHOVER_CRED_NAME = "Pushover - langgraph-agents"
 PUSHOVER_OP_REF = (
-    "op://Kubernetes/langgraph-agents/"
-    "Section_zmrx7lz3gepkhl63mhw6aq5xmy/PUSHOVER_APP_TOKEN"
+    "op://Kubernetes/langgraph-agents/Section_zmrx7lz3gepkhl63mhw6aq5xmy/PUSHOVER_APP_TOKEN"
 )
 
 ZULIP_CRED_ID = "LgZulipBrokerCred"
@@ -46,9 +45,15 @@ def op_read(ref: str) -> str:
 def n8n_pod() -> str:
     out = subprocess.check_output(
         [
-            "kubectl", "-n", N8N_NAMESPACE,
-            "get", "pods", "-l", N8N_LABEL_SELECTOR,
-            "-o", "jsonpath={.items[0].metadata.name}",
+            "kubectl",
+            "-n",
+            N8N_NAMESPACE,
+            "get",
+            "pods",
+            "-l",
+            N8N_LABEL_SELECTOR,
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
         ],
         text=True,
         stdin=subprocess.DEVNULL,
@@ -88,8 +93,11 @@ def main() -> int:
     if dry:
         # Redact when printing the plan
         for c in creds:
-            redacted = {k: "<redacted>" for k in c["data"]}
-            print(f"would import: id={c['id']} name={c['name']} type={c['type']} data-keys={list(redacted.keys())}")
+            keys = list(c["data"].keys())
+            print(
+                f"would import: id={c['id']} name={c['name']} "
+                f"type={c['type']} data-keys={keys}"
+            )
         return 0
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
@@ -98,19 +106,47 @@ def main() -> int:
 
     pod_path = "/tmp/lg-creds-bootstrap.json"
     try:
-        subprocess.check_call([
-            "kubectl", "-n", N8N_NAMESPACE,
-            "cp", local_path, f"{pod}:{pod_path}", "-c", "app",
-        ])
-        subprocess.check_call([
-            "kubectl", "-n", N8N_NAMESPACE, "exec", pod, "-c", "app", "--",
-            "n8n", "import:credentials", f"--input={pod_path}",
-        ])
+        subprocess.check_call(
+            [
+                "kubectl",
+                "-n",
+                N8N_NAMESPACE,
+                "cp",
+                local_path,
+                f"{pod}:{pod_path}",
+                "-c",
+                "app",
+            ]
+        )
+        subprocess.check_call(
+            [
+                "kubectl",
+                "-n",
+                N8N_NAMESPACE,
+                "exec",
+                pod,
+                "-c",
+                "app",
+                "--",
+                "n8n",
+                "import:credentials",
+                f"--input={pod_path}",
+            ]
+        )
         # best-effort cleanup of the pod-side temp file
         subprocess.run(
             [
-                "kubectl", "-n", N8N_NAMESPACE, "exec", pod, "-c", "app", "--",
-                "rm", "-f", pod_path,
+                "kubectl",
+                "-n",
+                N8N_NAMESPACE,
+                "exec",
+                pod,
+                "-c",
+                "app",
+                "--",
+                "rm",
+                "-f",
+                pod_path,
             ],
             check=False,
         )

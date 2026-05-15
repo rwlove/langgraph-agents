@@ -31,33 +31,33 @@ from typing import Any
 import requests
 
 STREAMS: list[dict[str, str]] = [
-    {"name": "homelab",      "description": "Cluster, infra, GitOps activity"},
-    {"name": "smart-home",   "description": "HA, Z-Wave, ESPHome, Frigate"},
-    {"name": "property",     "description": "3532 Foxhall coordination"},
-    {"name": "vehicles",     "description": "BMW + Toyota work"},
-    {"name": "career",       "description": "Resume / LinkedIn / role-search"},
-    {"name": "hobby",        "description": "Multicade, Kodi, side-projects"},
-    {"name": "medical",      "description": "Health-tracker drafts — user-only read"},
-    {"name": "approvals",    "description": "Approval requests + reactions (broker-bot only)"},
-    {"name": "supervisor",   "description": "Cross-cutting signals, anomalies"},
-    {"name": "digests",      "description": "Daily/weekly reports"},
+    {"name": "homelab", "description": "Cluster, infra, GitOps activity"},
+    {"name": "smart-home", "description": "HA, Z-Wave, ESPHome, Frigate"},
+    {"name": "property", "description": "3532 Foxhall coordination"},
+    {"name": "vehicles", "description": "BMW + Toyota work"},
+    {"name": "career", "description": "Resume / LinkedIn / role-search"},
+    {"name": "hobby", "description": "Multicade, Kodi, side-projects"},
+    {"name": "medical", "description": "Health-tracker drafts — user-only read"},
+    {"name": "approvals", "description": "Approval requests + reactions (broker-bot only)"},
+    {"name": "supervisor", "description": "Cross-cutting signals, anomalies"},
+    {"name": "digests", "description": "Daily/weekly reports"},
 ]
 
 BOTS: list[dict[str, Any]] = [
-    {"id": "triager",              "display": "Triager 📥",            "subscribe_to": "all-except-medical"},
-    {"id": "reporter",             "display": "Reporter 📊",           "subscribe_to": "all-except-medical"},
-    {"id": "note-maker",           "display": "Scribe 📝",             "subscribe_to": "all-except-medical"},
-    {"id": "researcher",           "display": "Scout 🔍",              "subscribe_to": "all-except-medical"},
-    {"id": "coder",                "display": "Forge ⚒️",              "subscribe_to": "all-except-medical"},
-    {"id": "errand-runner",        "display": "Runner 🏃",             "subscribe_to": "all-except-medical"},
-    {"id": "supervisor",           "display": "Watchman 🦉",           "subscribe_to": "all-except-medical"},
-    {"id": "reviewer",             "display": "Auditor 🧹",            "subscribe_to": "all-except-medical"},
-    {"id": "homelab-engineer",     "display": "Wrench 🔧",             "subscribe_to": "all-except-medical"},
-    {"id": "smart-home-engineer",  "display": "Spark ⚡",              "subscribe_to": "all-except-medical"},
-    {"id": "ml-tuner",             "display": "Tuner 🎛️",              "subscribe_to": "all-except-medical"},
-    {"id": "health-tracker",       "display": "Guardian 🩺",           "subscribe_to": "medical-only"},
-    {"id": "property-coordinator", "display": "Steward 🏡",            "subscribe_to": "all-except-medical"},
-    {"id": "approval-broker",      "display": "Broker 🔒",             "subscribe_to": "all-except-medical"},
+    {"id": "triager", "display": "Triager 📥", "subscribe_to": "all-except-medical"},
+    {"id": "reporter", "display": "Reporter 📊", "subscribe_to": "all-except-medical"},
+    {"id": "note-maker", "display": "Scribe 📝", "subscribe_to": "all-except-medical"},
+    {"id": "researcher", "display": "Scout 🔍", "subscribe_to": "all-except-medical"},
+    {"id": "coder", "display": "Forge ⚒️", "subscribe_to": "all-except-medical"},
+    {"id": "errand-runner", "display": "Runner 🏃", "subscribe_to": "all-except-medical"},
+    {"id": "supervisor", "display": "Watchman 🦉", "subscribe_to": "all-except-medical"},
+    {"id": "reviewer", "display": "Auditor 🧹", "subscribe_to": "all-except-medical"},
+    {"id": "homelab-engineer", "display": "Wrench 🔧", "subscribe_to": "all-except-medical"},
+    {"id": "smart-home-engineer", "display": "Spark ⚡", "subscribe_to": "all-except-medical"},
+    {"id": "ml-tuner", "display": "Tuner 🎛️", "subscribe_to": "all-except-medical"},
+    {"id": "health-tracker", "display": "Guardian 🩺", "subscribe_to": "medical-only"},
+    {"id": "property-coordinator", "display": "Steward 🏡", "subscribe_to": "all-except-medical"},
+    {"id": "approval-broker", "display": "Broker 🔒", "subscribe_to": "all-except-medical"},
 ]
 
 
@@ -112,7 +112,12 @@ class Zulip:
         target_email_prefix = f"{slug}-bot@"
         for u in all_users:
             if u.get("is_bot") and u.get("email", "").startswith(target_email_prefix):
-                return {"bot": slug, "action": "exists", "email": u["email"], "user_id": u["user_id"]}
+                return {
+                    "bot": slug,
+                    "action": "exists",
+                    "email": u["email"],
+                    "user_id": u["user_id"],
+                }
         if dry:
             return {"bot": slug, "action": "would-create"}
         r = self._post(
@@ -153,7 +158,9 @@ def streams_for_bot(bot_subscribe_to: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--apply", action="store_true", help="actually create things (default: dry-run)")
+    parser.add_argument(
+        "--apply", action="store_true", help="actually create things (default: dry-run)"
+    )
     args = parser.parse_args()
     dry = not args.apply
 
@@ -186,7 +193,9 @@ def main() -> int:
             None,
         )
         if match is None:
-            print(f"  {{'bot': {slug!r}, 'subscribe': 'skipped — bot not present'}}", file=sys.stderr)
+            print(
+                f"  {{'bot': {slug!r}, 'subscribe': 'skipped — bot not present'}}", file=sys.stderr
+            )
             continue
         streams = streams_for_bot(b["subscribe_to"])
         r = z.subscribe_bot_to_streams(match["email"], streams, dry)
