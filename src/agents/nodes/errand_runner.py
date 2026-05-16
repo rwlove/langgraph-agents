@@ -141,10 +141,8 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
             ),
         }
 
-    # Signed-token verification
-    signing_secret = (
-        settings.pushover_app_token or ""  # placeholder until n8n shared-secret lands
-    )
+    # Signed-token verification — shared HMAC with n8n's approval-receive workflow.
+    signing_secret = settings.langgraph_approval_signing_key or ""
     if not _verify_approval_token(
         state.approval_token or "",
         task_id=state.task_id,

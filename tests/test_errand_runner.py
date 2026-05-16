@@ -106,7 +106,7 @@ def test_class_c_without_undo_path_escalates(
 ) -> None:
     """A Class C action that lacks an undo path should be bumped to D for explicit
     confirmation rather than silently proceeding."""
-    monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test-secret")
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
     get_settings.cache_clear()
 
     token = _signed_token("t-6", "C", "ha-mcp", "call_service", "test-secret")
@@ -132,7 +132,7 @@ def test_executes_when_all_gates_pass(
     temp_vault: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Happy path: valid approval + valid signature + undo path + allowlist match."""
-    monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test-secret")
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
     get_settings.cache_clear()
 
     token = _signed_token("t-7", "C", "ha-mcp", "call_service", "test-secret")

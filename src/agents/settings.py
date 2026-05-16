@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     pushover_app_token: str | None = Field(default=None)
     pushover_user_key: str | None = Field(default=None)
 
+    # --- approval signing (HMAC shared with n8n approval-broker) ---
+    langgraph_approval_signing_key: str | None = Field(
+        default=None,
+        description=(
+            "Shared HMAC secret for verifying approval tokens minted by n8n's "
+            "approval-receive workflow. Must match $env.LANGGRAPH_APPROVAL_SIGNING_KEY "
+            "in the n8n container. Both pods receive it from the same 1Password item "
+            "via ExternalSecret."
+        ),
+    )
+
     # --- cost caps (per security review cat 7) ---
     cost_cap_per_task_usd: float = 5.0
     cost_cap_per_agent_daily_usd: float = 10.0
