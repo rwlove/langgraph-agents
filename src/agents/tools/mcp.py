@@ -152,6 +152,16 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         + _READ_ONLY_OMADA
         + _READ_ONLY_N8N
     ),
+    "network-operator": frozenset(
+        # L1-L7 network: omada controller + netbox inventory + kubectl
+        # network resources + prom/grafana traffic. Read-only - Class C+
+        # writes route through errand-runner with signed approval.
+        _READ_ONLY_OMADA
+        + _READ_ONLY_NETBOX
+        + _READ_ONLY_KUBECTL
+        + _READ_ONLY_PROMETHEUS
+        + _READ_ONLY_GRAFANA
+    ),
     "smart-home-engineer": frozenset(
         _READ_ONLY_HA
         + _READ_ONLY_PROMETHEUS
