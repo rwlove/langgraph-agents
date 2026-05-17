@@ -21,7 +21,7 @@ def _make_app(temp_vault: Path) -> FastAPI:
     return app
 
 
-def test_list_models_returns_14_agents(temp_vault: Path) -> None:
+def test_list_models_returns_15_agents(temp_vault: Path) -> None:
     app = _make_app(temp_vault)
     with TestClient(app) as client:
         r = client.get("/v1/models")
@@ -30,7 +30,7 @@ def test_list_models_returns_14_agents(temp_vault: Path) -> None:
         assert body["object"] == "list"
         ids = [m["id"] for m in body["data"]]
         assert set(ids) == set(ALL_AGENT_IDS)
-        assert len(ids) == 14  # post-doc-writer addition
+        assert len(ids) == 15  # post-network-operator addition
 
 
 def test_chat_rejects_unknown_model(temp_vault: Path) -> None:

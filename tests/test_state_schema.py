@@ -22,7 +22,8 @@ def test_all_agent_ids_unique() -> None:
 
 def test_all_agent_ids_count() -> None:
     # 13 fleet agents + doc-writer (TODO 9, added 2026-05-15)
-    assert len(ALL_AGENT_IDS) == 14
+    # + network-operator (ported from claude-personal subagent, 2026-05-17)
+    assert len(ALL_AGENT_IDS) == 15
 
 
 def test_triage_decision_accepts_valid_target() -> None:

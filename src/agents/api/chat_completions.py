@@ -3,7 +3,7 @@
 OpenWebUI registers an external OpenAI-compatible endpoint and lists its
 models in the model picker. Each registered agent ID is exposed here as
 a model:
-  - GET /v1/models → list of {id, object, owned_by} for the 13 agents
+  - GET /v1/models → list of {id, object, owned_by} for the 15 agents
   - POST /v1/chat/completions → single-agent chat (no fleet orchestration)
 
 This surface deliberately bypasses the triager + approval flow — it's for
@@ -82,6 +82,7 @@ _PER_AGENT_MODEL: dict[str, str] = {
     "supervisor": "qwen2.5:7b",
     "reviewer": "qwen2.5:7b",
     "homelab-engineer": "qwen2.5:7b",
+    "network-operator": "qwen2.5:7b",
     "smart-home-engineer": "qwen2.5:7b",
     "ml-tuner": "qwen2.5:7b",
     "health-tracker": "qwen2.5:7b",  # local-only enforced via persona + no provider switch
@@ -152,7 +153,7 @@ async def chat_completions(
 ) -> Any:
     """Direct chat with a specific agent. Bypasses fleet orchestration.
 
-    `model` must be one of the 13 agent IDs (see GET /v1/models). The
+    `model` must be one of the 15 agent IDs (see GET /v1/models). The
     request flows: persona load → ollama call → response.
     """
     if req.model not in ALL_AGENT_IDS:
