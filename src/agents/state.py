@@ -8,7 +8,7 @@ JSON-parse time, not at runtime.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast, get_args
 
 from pydantic import BaseModel, Field
 
@@ -39,25 +39,12 @@ AgentId = Literal[
     "doc-writer",
 ]
 
-ALL_AGENT_IDS: tuple[AgentId, ...] = (
-    "triager",
-    "reporter",
-    "note-maker",
-    "researcher",
-    "coder",
-    "errand-runner",
-    "supervisor",
-    "reviewer",
-    "homelab-engineer",
-    "network-operator",
-    "storage-operator",
-    "smart-home-operator",
-    "ml-operator",
-    "observability-operator",
-    "health-tracker",
-    "property-coordinator",
-    "doc-writer",
-)
+# Derived from the AgentId Literal — `get_args` returns the Literal members at
+# import time, making AgentId the single source of truth for the agent list.
+# Adding a new agent now only requires touching AgentId above; this tuple
+# (and the NODES dict in agents.nodes.__init__) update automatically /
+# raise in tests if you forget the node-function side.
+ALL_AGENT_IDS: tuple[AgentId, ...] = cast("tuple[AgentId, ...]", get_args(AgentId))
 
 Domain = Literal[
     "homelab",
