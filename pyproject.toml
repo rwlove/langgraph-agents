@@ -41,6 +41,7 @@ dependencies = [
 
     # Observability
     "langfuse>=2.55.0",
+    "prometheus-client>=0.21.0",
 ]
 
 [dependency-groups]
