@@ -162,15 +162,48 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         + _READ_ONLY_PROMETHEUS
         + _READ_ONLY_GRAFANA
     ),
-    "smart-home-engineer": frozenset(
+    "storage-operator": frozenset(
+        # PVC / PV / pool / volume / bucket health via kubectl + metrics.
+        # No storage-specific MCP yet (no ceph-mcp / longhorn-mcp); CNPG /
+        # Barman CR reads are RBAC-denied at the SA level. Class C+ writes
+        # route through errand-runner with signed approval.
+        _READ_ONLY_KUBECTL
+        + _READ_ONLY_PROMETHEUS
+        + _READ_ONLY_GRAFANA
+    ),
+    "smart-home-operator": frozenset(
+        # HA + protocol hubs + HA-adjacent kubectl reads (for `home` ns
+        # pods, music-assistant in `media`, HA's CNPG cluster in
+        # `databases`). HA writes route through errand-runner.
         _READ_ONLY_HA
+        + _READ_ONLY_KUBECTL
         + _READ_ONLY_PROMETHEUS
         + _READ_ONLY_GRAFANA
         + _READ_ONLY_SEARXNG
         + _READ_ONLY_PAPERLESS
     ),
-    "ml-tuner": frozenset(
-        _READ_ONLY_PROMETHEUS + _READ_ONLY_GRAFANA + _READ_ONLY_SEARXNG
+    "ml-operator": frozenset(
+        # Ollama / immich-ml / langgraph-agents pod state via kubectl, GPU
+        # + ML metrics via prom/grafana, searxng for model card / vendor
+        # research. Pulls / helmrelease bumps / tool toggles route through
+        # errand-runner with signed approval.
+        _READ_ONLY_KUBECTL
+        + _READ_ONLY_PROMETHEUS
+        + _READ_ONLY_GRAFANA
+        + _READ_ONLY_SEARXNG
+    ),
+    "observability-operator": frozenset(
+        # PrometheusRule / ServiceMonitor / AlertmanagerConfig reads via
+        # kubectl. Live Prometheus query + range query (24h replay for
+        # flap-testing) via prom. Grafana dashboard inspection. n8n for
+        # the AlertManager→HolmesGPT path. Searxng for upstream rule
+        # patterns + Robusta docs. Rule applies / silences / routing
+        # changes route through errand-runner.
+        _READ_ONLY_KUBECTL
+        + _READ_ONLY_PROMETHEUS
+        + _READ_ONLY_GRAFANA
+        + _READ_ONLY_N8N
+        + _READ_ONLY_SEARXNG
     ),
     "health-tracker": frozenset(_READ_ONLY_PAPERLESS),  # ONLY paperless; no external
     "property-coordinator": frozenset(
