@@ -6,11 +6,11 @@ Design rationale + 10 locked decisions: see `project_langgraph_redesign` in clau
 
 ## What's in here
 
-16 agents as graph nodes:
+17 agents as graph nodes:
 
 | Generalists | Specialists |
 |---|---|
-| triager · reporter · note-maker · researcher · coder · errand-runner · supervisor · reviewer · doc-writer | homelab-engineer · network-operator · storage-operator · smart-home-operator · ml-operator · health-tracker · property-coordinator |
+| triager · reporter · note-maker · researcher · coder · errand-runner · supervisor · reviewer · doc-writer | homelab-engineer · network-operator · storage-operator · smart-home-operator · ml-operator · observability-operator · health-tracker · property-coordinator |
 
 Personas live in the Obsidian vault at `~/vaults/claude/agents/workspaces/<agent>/{SOUL,IDENTITY,AGENTS,USER}.md` — the runtime loads them at startup.
 

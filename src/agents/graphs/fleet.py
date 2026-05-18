@@ -21,6 +21,7 @@ from agents.nodes.homelab_engineer import homelab_engineer_node
 from agents.nodes.ml_operator import ml_operator_node
 from agents.nodes.network_operator import network_operator_node
 from agents.nodes.note_maker import note_maker_node
+from agents.nodes.observability_operator import observability_operator_node
 from agents.nodes.property_coordinator import property_coordinator_node
 from agents.nodes.reporter import reporter_node
 from agents.nodes.researcher import researcher_node
@@ -53,6 +54,7 @@ _DEFAULT_ACTION_CLASS: dict[str, ActionClass] = {
     "storage-operator": "A",  # propose-only; class C+ side effects route via errand-runner
     "smart-home-operator": "A",  # propose-only; class C+ side effects route via errand-runner
     "ml-operator": "A",  # propose-only; class C+ side effects route via errand-runner
+    "observability-operator": "A",  # propose-only; class C+ side effects route via errand-runner
     "health-tracker": "C",  # every health-tracker output is approval-gated
     "property-coordinator": "B",
     "doc-writer": "B",
@@ -152,6 +154,10 @@ def build_fleet_graph(checkpointer: BaseCheckpointSaver[Any] | None = None) -> A
     )
     builder.add_node(
         "ml-operator", _with_activity_log("ml-operator", ml_operator_node)
+    )
+    builder.add_node(
+        "observability-operator",
+        _with_activity_log("observability-operator", observability_operator_node),
     )
     builder.add_node(
         "health-tracker", _with_activity_log("health-tracker", health_tracker_node)

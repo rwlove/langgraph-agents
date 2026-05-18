@@ -192,6 +192,19 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         + _READ_ONLY_GRAFANA
         + _READ_ONLY_SEARXNG
     ),
+    "observability-operator": frozenset(
+        # PrometheusRule / ServiceMonitor / AlertmanagerConfig reads via
+        # kubectl. Live Prometheus query + range query (24h replay for
+        # flap-testing) via prom. Grafana dashboard inspection. n8n for
+        # the AlertManager→HolmesGPT path. Searxng for upstream rule
+        # patterns + Robusta docs. Rule applies / silences / routing
+        # changes route through errand-runner.
+        _READ_ONLY_KUBECTL
+        + _READ_ONLY_PROMETHEUS
+        + _READ_ONLY_GRAFANA
+        + _READ_ONLY_N8N
+        + _READ_ONLY_SEARXNG
+    ),
     "health-tracker": frozenset(_READ_ONLY_PAPERLESS),  # ONLY paperless; no external
     "property-coordinator": frozenset(
         _READ_ONLY_PAPERLESS + _READ_ONLY_SEARXNG + _READ_ONLY_IMMICH

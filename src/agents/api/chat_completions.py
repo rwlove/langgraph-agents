@@ -86,6 +86,7 @@ _PER_AGENT_MODEL: dict[str, str] = {
     "storage-operator": "qwen2.5:7b",
     "smart-home-operator": "qwen2.5:7b",
     "ml-operator": "qwen2.5:7b",
+    "observability-operator": "qwen2.5:7b",
     "health-tracker": "qwen2.5:7b",  # local-only enforced via persona + no provider switch
     "property-coordinator": "qwen2.5:7b",
     "doc-writer": "qwen2.5:7b",  # fills pre-existing gap noted in project_langgraph_specialist_5_places

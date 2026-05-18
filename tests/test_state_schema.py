@@ -26,7 +26,8 @@ def test_all_agent_ids_count() -> None:
     # + storage-operator (net-new, 2026-05-18)
     # + smart-home-operator (promoted from smart-home-engineer, 2026-05-18)
     # + ml-operator (promoted from ml-tuner, 2026-05-18)
-    assert len(ALL_AGENT_IDS) == 16
+    # + observability-operator (net-new, 2026-05-18)
+    assert len(ALL_AGENT_IDS) == 17
 
 
 def test_triage_decision_accepts_valid_target() -> None:

@@ -57,6 +57,7 @@ BOTS: list[dict[str, Any]] = [
     {"id": "storage-operator", "display": "Granary 🌾", "subscribe_to": "all-except-medical"},
     {"id": "smart-home-operator", "display": "Sentinel 👁️", "subscribe_to": "all-except-medical"},
     {"id": "ml-operator", "display": "Cortex 🧠", "subscribe_to": "all-except-medical"},
+    {"id": "observability-operator", "display": "Beacon 🔦", "subscribe_to": "all-except-medical"},
     {"id": "health-tracker", "display": "Guardian 🩺", "subscribe_to": "medical-only"},
     {"id": "property-coordinator", "display": "Steward 🏡", "subscribe_to": "all-except-medical"},
     {"id": "approval-broker", "display": "Broker 🔒", "subscribe_to": "all-except-medical"},

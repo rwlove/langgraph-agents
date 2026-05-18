@@ -41,6 +41,7 @@ OPERATOR_SLUGS = (
     "storage-operator",
     "smart-home-operator",
     "ml-operator",
+    "observability-operator",
 )
 
 

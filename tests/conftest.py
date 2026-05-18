@@ -27,7 +27,8 @@ def _populate_temp_vault(root: Path) -> None:
         "triager", "reporter", "note-maker", "researcher", "coder",
         "errand-runner", "supervisor", "reviewer", "homelab-engineer",
         "network-operator", "storage-operator", "smart-home-operator",
-        "ml-operator", "health-tracker", "property-coordinator", "doc-writer",
+        "ml-operator", "observability-operator", "health-tracker",
+        "property-coordinator", "doc-writer",
     ]
     for agent in agent_ids:
         d = workspaces / agent
