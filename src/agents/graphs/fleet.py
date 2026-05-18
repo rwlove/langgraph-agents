@@ -13,23 +13,7 @@ from typing import Any, cast
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
-from agents.nodes.coder import coder_node
-from agents.nodes.doc_writer import doc_writer_node
-from agents.nodes.errand_runner import errand_runner_node
-from agents.nodes.health_tracker import health_tracker_node
-from agents.nodes.homelab_engineer import homelab_engineer_node
-from agents.nodes.ml_operator import ml_operator_node
-from agents.nodes.network_operator import network_operator_node
-from agents.nodes.note_maker import note_maker_node
-from agents.nodes.observability_operator import observability_operator_node
-from agents.nodes.property_coordinator import property_coordinator_node
-from agents.nodes.reporter import reporter_node
-from agents.nodes.researcher import researcher_node
-from agents.nodes.reviewer import reviewer_node
-from agents.nodes.smart_home_operator import smart_home_operator_node
-from agents.nodes.storage_operator import storage_operator_node
-from agents.nodes.supervisor import supervisor_node
-from agents.nodes.triager import triager_node
+from agents.nodes import NODES
 from agents.state import ALL_AGENT_IDS, ActionClass, AgentId, FleetState
 from agents.tools.activity_log import log_activity
 
@@ -128,45 +112,10 @@ def build_fleet_graph(checkpointer: BaseCheckpointSaver[Any] | None = None) -> A
     """
     builder = StateGraph(FleetState)
 
-    # ---- nodes (13) ----
-    builder.add_node("triager", _with_activity_log("triager", triager_node))
-    builder.add_node("reporter", _with_activity_log("reporter", reporter_node))
-    builder.add_node("note-maker", _with_activity_log("note-maker", note_maker_node))
-    builder.add_node("researcher", _with_activity_log("researcher", researcher_node))
-    builder.add_node("coder", _with_activity_log("coder", coder_node))
-    builder.add_node("errand-runner", _with_activity_log("errand-runner", errand_runner_node))
-    builder.add_node("supervisor", _with_activity_log("supervisor", supervisor_node))
-    builder.add_node("reviewer", _with_activity_log("reviewer", reviewer_node))
-    builder.add_node(
-        "homelab-engineer", _with_activity_log("homelab-engineer", homelab_engineer_node)
-    )
-    builder.add_node(
-        "network-operator",
-        _with_activity_log("network-operator", network_operator_node),
-    )
-    builder.add_node(
-        "storage-operator",
-        _with_activity_log("storage-operator", storage_operator_node),
-    )
-    builder.add_node(
-        "smart-home-operator",
-        _with_activity_log("smart-home-operator", smart_home_operator_node),
-    )
-    builder.add_node(
-        "ml-operator", _with_activity_log("ml-operator", ml_operator_node)
-    )
-    builder.add_node(
-        "observability-operator",
-        _with_activity_log("observability-operator", observability_operator_node),
-    )
-    builder.add_node(
-        "health-tracker", _with_activity_log("health-tracker", health_tracker_node)
-    )
-    builder.add_node(
-        "property-coordinator",
-        _with_activity_log("property-coordinator", property_coordinator_node),
-    )
-    builder.add_node("doc-writer", _with_activity_log("doc-writer", doc_writer_node))
+    # ---- nodes (registered from the NODES dict; adding a new agent is now
+    # one Literal entry + one node file + one NODES dict entry — no edits here) ----
+    for agent_id, node_fn in NODES.items():
+        builder.add_node(agent_id, _with_activity_log(agent_id, node_fn))
 
     # ---- edges ----
     builder.add_edge(START, "triager")

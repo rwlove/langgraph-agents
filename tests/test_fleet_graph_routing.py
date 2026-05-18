@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import patch
 
 from agents.graphs.fleet import build_fleet_graph
+from agents.nodes import NODES
 from agents.state import ALL_AGENT_IDS, FleetState, TriageDecision
 
 
@@ -41,21 +42,24 @@ def test_graph_compiles(temp_vault: Path) -> None:
 
 
 def test_every_specialist_target_is_reachable(temp_vault: Path) -> None:
-    """For each non-triager agent ID, mock its node + the triager to route there."""
+    """For each non-triager agent ID, mock its node + the triager to route there.
+
+    Post node-registry refactor: graph builder iterates `NODES.items()` at
+    build time, so patching `NODES[<id>]` swaps the function the builder
+    sees. We patch the dict entries directly rather than re-imported
+    symbols (which the registry no longer exposes from fleet.py).
+    """
     for target in ALL_AGENT_IDS:
         if target == "triager":
             continue
 
-        node_function_name = f"{target.replace('-', '_')}_node"
-
         with (
-            patch(
-                "agents.graphs.fleet.triager_node",
-                _fake_triager_returning(target),
-            ),
-            patch(
-                f"agents.graphs.fleet.{node_function_name}",
-                _fake_specialist_output(target),
+            patch.dict(
+                NODES,
+                {
+                    "triager": _fake_triager_returning(target),
+                    target: _fake_specialist_output(target),
+                },
             ),
         ):
             graph = build_fleet_graph(checkpointer=None)
