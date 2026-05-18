@@ -15,13 +15,14 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from agents.api import admin, approval, chat_completions, health, inbox
 from agents.graphs.fleet import build_fleet_graph
+from agents.observability import configure_structlog, metrics_text
 from agents.settings import get_settings
 
 logger = logging.getLogger("agents")
@@ -65,6 +66,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         stream=sys.stdout,
     )
+    # JSON structured logs → stdout → Vector → Loki (Path A per plan v5).
+    configure_structlog(level=settings.log_level)
     logger.info("starting langgraph-agents, vault_root=%s", settings.vault_root)
 
     async with AsyncExitStack() as stack:
@@ -87,6 +90,15 @@ app.include_router(inbox.router)
 app.include_router(approval.router)
 app.include_router(admin.router)
 app.include_router(chat_completions.router)
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics() -> Response:
+    """Prometheus scrape endpoint. ServiceMonitor in `kubernetes/apps/ai/
+    langgraph-agents/app/` targets this path on port 8765.
+    """
+    payload, content_type = metrics_text()
+    return Response(content=payload, media_type=content_type)
 
 
 def run() -> None:
