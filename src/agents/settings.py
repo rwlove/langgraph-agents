@@ -28,9 +28,33 @@ class Settings(BaseSettings):
     )
 
     # --- model providers ---
+    # ollama_base_url is the legacy single-endpoint setting (pre-Spark, OpenAI
+    # /v1 shim URL). Phase 2 replaces it with explicit per-service URLs:
+    # ollama_p40_url + ollama_spark_url. Both default to in-cluster Service
+    # DNS without the /v1 suffix (langchain_ollama.ChatOllama uses native /api
+    # routes; the factory strips /v1 defensively if it leaks in).
     ollama_base_url: str = Field(
         default="http://localhost:11434/v1",
-        description="Ollama OpenAI-compatible endpoint.",
+        description=(
+            "DEPRECATED — kept for backward compat. New code uses ollama_p40_url "
+            "+ ollama_spark_url + the agents.llm factory. Will be removed after "
+            "one release."
+        ),
+    )
+    ollama_p40_url: str = Field(
+        default="http://ollama.ai.svc.cluster.local:11434",
+        description=(
+            "P40-Ollama Service endpoint (qwen2.5:7b). Used for light/mechanical "
+            "agents per AGENT_GROUP. NO /v1 suffix — ChatOllama uses native /api "
+            "routes."
+        ),
+    )
+    ollama_spark_url: str = Field(
+        default="http://ollama-spark.ai.svc.cluster.local:11434",
+        description=(
+            "Spark-Ollama Service endpoint (qwen2.5:32b). Used for "
+            "reasoning/structured-output agents per AGENT_GROUP."
+        ),
     )
     anthropic_api_key: str | None = Field(
         default=None,
@@ -38,19 +62,40 @@ class Settings(BaseSettings):
     )
     enable_claude_api: bool = Field(
         default=False,
-        description="Master switch. Even if set, health-tracker never uses Claude.",
+        description=(
+            "DEPRECATED master switch — kept for backward compat. New flow uses "
+            "the per-call escalate= kwarg + degraded_mode_escalation_enabled "
+            "flag in agents.llm."
+        ),
+    )
+    degraded_mode_escalation_enabled: bool = Field(
+        default=False,
+        description=(
+            "When True, the factory falls back to Claude if BOTH local Ollama "
+            "endpoints are unhealthy AND ANTHROPIC_API_KEY is set. When False, "
+            "LocalOllamaUnavailable is raised and the task queues in Postgres "
+            "(agents.queue) for retry when health restores."
+        ),
+    )
+    claude_model: str = Field(
+        default="claude-opus-4-7",
+        description=(
+            "Claude model for escalation paths. Override via env. Used by "
+            "agents.llm._build_claude."
+        ),
     )
     triager_model: str = Field(
         default="qwen2.5:7b",
-        description="Model for the triager. Small + fast.",
+        description=(
+            "DEPRECATED — model selected per-agent by AGENT_GROUP in agents.llm. "
+            "Kept for backward compat with any direct reads."
+        ),
     )
     specialist_model: str = Field(
         default="qwen2.5:7b",
         description=(
-            "Default model for content-producing specialists "
-            "(reporter/note-maker/researcher/coder/etc). "
-            "Defaults to 7b to fit the P40's available VRAM headroom. "
-            "Flip to qwen2.5:14b after a GPU upgrade."
+            "DEPRECATED — model selected per-agent by AGENT_GROUP in agents.llm. "
+            "Kept for backward compat with any direct reads."
         ),
     )
 
