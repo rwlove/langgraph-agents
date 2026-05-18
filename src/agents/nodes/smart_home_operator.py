@@ -21,16 +21,14 @@ from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
+from agents.llm import llm
 from agents.personas import load_persona
-from agents.settings import get_settings
-from agents.state import ActionClass, FleetState
+from agents.state import ActionClass, AgentId, FleetState
 from agents.tools.obsidian import write_draft
 
-_AGENT_ID = "smart-home-operator"
-_MODEL = "qwen2.5:7b"
+_AGENT_ID: AgentId = "smart-home-operator"
 _TEMPERATURE = 0.2
 
 
@@ -109,7 +107,9 @@ class SmartHomeFinding(BaseModel):
             "most writes are C via errand-runner."
         )
     )
-    handoff_target: Literal["user", "errand-runner", "homelab-engineer", "storage-operator", "ml-operator"] = "user"
+    handoff_target: Literal[
+        "user", "errand-runner", "homelab-engineer", "storage-operator", "ml-operator"
+    ] = "user"
     affected_resources: list[str] = Field(
         default_factory=list,
         description=(
@@ -127,12 +127,7 @@ class SmartHomeFinding(BaseModel):
 
 
 def _build_llm() -> BaseChatModel:
-    settings = get_settings()
-    return ChatOllama(
-        model=_MODEL,
-        base_url=settings.ollama_base_url.removesuffix("/v1"),
-        temperature=_TEMPERATURE,
-    ).with_structured_output(SmartHomeFinding)  # type: ignore[return-value]
+    return llm(_AGENT_ID, temperature=_TEMPERATURE).with_structured_output(SmartHomeFinding)  # type: ignore[return-value]
 
 
 def _render_markdown(finding: SmartHomeFinding, task_id: str) -> str:

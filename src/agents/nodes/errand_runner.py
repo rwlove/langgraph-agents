@@ -20,16 +20,15 @@ import json
 from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 
+from agents.llm import llm
 from agents.personas import load_persona
 from agents.settings import get_settings
 from agents.state import ActionClass, AgentId, FleetState
 from agents.tools.mcp import MCPGatewayClient, MCPPermissionError, is_allowed
 
 _AGENT_ID: AgentId = "errand-runner"
-_MODEL = "qwen2.5:7b"
 _TEMPERATURE = 0.0  # deterministic — we're verifying + executing, not generating
 
 Outcome = Literal["executed", "rejected", "preflight-failed", "no-approval"]
@@ -84,12 +83,7 @@ def _verify_approval_token(
 def _build_llm() -> BaseChatModel:
     """Used only when the inbound request needs interpretation. Most invocations
     bypass the LLM and go straight to verify + execute."""
-    settings = get_settings()
-    return ChatOllama(
-        model=_MODEL,
-        base_url=settings.ollama_base_url.removesuffix("/v1"),
-        temperature=_TEMPERATURE,
-    )
+    return llm(_AGENT_ID, temperature=_TEMPERATURE)
 
 
 def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911

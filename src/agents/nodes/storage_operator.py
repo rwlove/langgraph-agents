@@ -20,16 +20,14 @@ from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
+from agents.llm import llm
 from agents.personas import load_persona
-from agents.settings import get_settings
-from agents.state import ActionClass, FleetState
+from agents.state import ActionClass, AgentId, FleetState
 from agents.tools.obsidian import write_draft
 
-_AGENT_ID = "storage-operator"
-_MODEL = "qwen2.5:7b"
+_AGENT_ID: AgentId = "storage-operator"
 _TEMPERATURE = 0.2
 
 
@@ -42,7 +40,9 @@ class StorageFinding(BaseModel):
     can act on the finding without re-deriving the safety analysis.
     """
 
-    summary: str = Field(description="One-paragraph state of the storage situation for this request.")
+    summary: str = Field(
+        description="One-paragraph state of the storage situation for this request.",
+    )
     failure_domain: str = Field(
         description=(
             "What data is at risk if this change misbehaves. From the "
@@ -104,7 +104,9 @@ class StorageFinding(BaseModel):
             "be exceedingly rare; most writes are C via errand-runner."
         )
     )
-    handoff_target: Literal["user", "errand-runner", "homelab-engineer", "smart-home-operator", "ml-operator"] = "user"
+    handoff_target: Literal[
+        "user", "errand-runner", "homelab-engineer", "smart-home-operator", "ml-operator"
+    ] = "user"
     affected_resources: list[str] = Field(
         default_factory=list,
         description=(
@@ -122,12 +124,7 @@ class StorageFinding(BaseModel):
 
 
 def _build_llm() -> BaseChatModel:
-    settings = get_settings()
-    return ChatOllama(
-        model=_MODEL,
-        base_url=settings.ollama_base_url.removesuffix("/v1"),
-        temperature=_TEMPERATURE,
-    ).with_structured_output(StorageFinding)  # type: ignore[return-value]
+    return llm(_AGENT_ID, temperature=_TEMPERATURE).with_structured_output(StorageFinding)  # type: ignore[return-value]
 
 
 def _render_markdown(finding: StorageFinding, task_id: str) -> str:
