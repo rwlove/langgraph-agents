@@ -14,16 +14,15 @@ from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
+from agents.llm import llm
 from agents.personas import load_persona
 from agents.settings import get_settings
-from agents.state import FleetState
+from agents.state import AgentId, FleetState
 from agents.tools.obsidian import WriteResult, _write_atomic
 
-_AGENT_ID = "reviewer"
-_MODEL = "qwen2.5:7b"
+_AGENT_ID: AgentId = "reviewer"
 _TEMPERATURE = 0.2
 
 Tier = Literal["urgent", "notable", "routine"]
@@ -55,12 +54,7 @@ class ReviewerDigest(BaseModel):
 
 
 def _build_llm() -> BaseChatModel:
-    settings = get_settings()
-    return ChatOllama(
-        model=_MODEL,
-        base_url=settings.ollama_base_url.removesuffix("/v1"),
-        temperature=_TEMPERATURE,
-    ).with_structured_output(ReviewerDigest)  # type: ignore[return-value]
+    return llm(_AGENT_ID, temperature=_TEMPERATURE).with_structured_output(ReviewerDigest)  # type: ignore[return-value]
 
 
 def _find_aging_todos() -> list[tuple[Path, datetime, Tier]]:

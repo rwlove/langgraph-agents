@@ -15,16 +15,14 @@ from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
+from agents.llm import llm
 from agents.personas import load_persona
-from agents.settings import get_settings
-from agents.state import FleetState
+from agents.state import AgentId, FleetState
 from agents.tools.obsidian import VaultGrepHit, grep_vault_memory, write_finding
 
-_AGENT_ID = "researcher"
-_MODEL = "qwen2.5:7b"
+_AGENT_ID: AgentId = "researcher"
 _TEMPERATURE = 0.2
 
 Confidence = Literal["high", "medium", "low", "inconclusive"]
@@ -55,12 +53,7 @@ class ResearchFinding(BaseModel):
 
 
 def _build_llm() -> BaseChatModel:
-    settings = get_settings()
-    return ChatOllama(
-        model=_MODEL,
-        base_url=settings.ollama_base_url.removesuffix("/v1"),
-        temperature=_TEMPERATURE,
-    ).with_structured_output(ResearchFinding)  # type: ignore[return-value]
+    return llm(_AGENT_ID, temperature=_TEMPERATURE).with_structured_output(ResearchFinding)  # type: ignore[return-value]
 
 
 def _extract_search_terms(content: str) -> list[str]:

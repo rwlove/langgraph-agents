@@ -15,15 +15,13 @@ from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
+from agents.llm import llm
 from agents.personas import load_persona
-from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS, AgentId, FleetState
 
-_AGENT_ID = "supervisor"
-_MODEL = "qwen2.5:7b"
+_AGENT_ID: AgentId = "supervisor"
 _TEMPERATURE = 0.1
 
 _CASCADE_LIMIT = 2
@@ -44,12 +42,7 @@ class SupervisorDecision(BaseModel):
 
 
 def _build_llm() -> BaseChatModel:
-    settings = get_settings()
-    return ChatOllama(
-        model=_MODEL,
-        base_url=settings.ollama_base_url.removesuffix("/v1"),
-        temperature=_TEMPERATURE,
-    ).with_structured_output(SupervisorDecision)  # type: ignore[return-value]
+    return llm(_AGENT_ID, temperature=_TEMPERATURE).with_structured_output(SupervisorDecision)  # type: ignore[return-value]
 
 
 def supervisor_node(state: FleetState) -> dict[str, Any]:

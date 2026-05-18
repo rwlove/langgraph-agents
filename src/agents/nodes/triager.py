@@ -10,23 +10,18 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 
+from agents.llm import llm
 from agents.personas import load_persona
-from agents.settings import get_settings
-from agents.state import FleetState, TriageDecision
+from agents.state import AgentId, FleetState, TriageDecision
 
-_TRIAGER_AGENT_ID = "triager"
-_TRIAGER_MODEL = "qwen2.5:7b"
+_TRIAGER_AGENT_ID: AgentId = "triager"
 _TRIAGER_TEMPERATURE = 0.1
 
 
 def _build_llm() -> Any:
-    settings = get_settings()
-    return ChatOllama(
-        model=_TRIAGER_MODEL,
-        base_url=settings.ollama_base_url.removesuffix("/v1"),
-        temperature=_TRIAGER_TEMPERATURE,
+    return llm(
+        _TRIAGER_AGENT_ID, temperature=_TRIAGER_TEMPERATURE
     ).with_structured_output(TriageDecision)
 
 
