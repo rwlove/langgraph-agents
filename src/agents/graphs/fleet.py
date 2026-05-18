@@ -18,14 +18,15 @@ from agents.nodes.doc_writer import doc_writer_node
 from agents.nodes.errand_runner import errand_runner_node
 from agents.nodes.health_tracker import health_tracker_node
 from agents.nodes.homelab_engineer import homelab_engineer_node
-from agents.nodes.ml_tuner import ml_tuner_node
+from agents.nodes.ml_operator import ml_operator_node
 from agents.nodes.network_operator import network_operator_node
 from agents.nodes.note_maker import note_maker_node
 from agents.nodes.property_coordinator import property_coordinator_node
 from agents.nodes.reporter import reporter_node
 from agents.nodes.researcher import researcher_node
 from agents.nodes.reviewer import reviewer_node
-from agents.nodes.smart_home_engineer import smart_home_engineer_node
+from agents.nodes.smart_home_operator import smart_home_operator_node
+from agents.nodes.storage_operator import storage_operator_node
 from agents.nodes.supervisor import supervisor_node
 from agents.nodes.triager import triager_node
 from agents.state import ALL_AGENT_IDS, ActionClass, AgentId, FleetState
@@ -49,8 +50,9 @@ _DEFAULT_ACTION_CLASS: dict[str, ActionClass] = {
     "reviewer": "A",
     "homelab-engineer": "A",
     "network-operator": "A",  # propose-only; class C+ side effects route via errand-runner
-    "smart-home-engineer": "A",
-    "ml-tuner": "A",
+    "storage-operator": "A",  # propose-only; class C+ side effects route via errand-runner
+    "smart-home-operator": "A",  # propose-only; class C+ side effects route via errand-runner
+    "ml-operator": "A",  # propose-only; class C+ side effects route via errand-runner
     "health-tracker": "C",  # every health-tracker output is approval-gated
     "property-coordinator": "B",
     "doc-writer": "B",
@@ -141,10 +143,16 @@ def build_fleet_graph(checkpointer: BaseCheckpointSaver[Any] | None = None) -> A
         _with_activity_log("network-operator", network_operator_node),
     )
     builder.add_node(
-        "smart-home-engineer",
-        _with_activity_log("smart-home-engineer", smart_home_engineer_node),
+        "storage-operator",
+        _with_activity_log("storage-operator", storage_operator_node),
     )
-    builder.add_node("ml-tuner", _with_activity_log("ml-tuner", ml_tuner_node))
+    builder.add_node(
+        "smart-home-operator",
+        _with_activity_log("smart-home-operator", smart_home_operator_node),
+    )
+    builder.add_node(
+        "ml-operator", _with_activity_log("ml-operator", ml_operator_node)
+    )
     builder.add_node(
         "health-tracker", _with_activity_log("health-tracker", health_tracker_node)
     )

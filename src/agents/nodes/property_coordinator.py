@@ -53,7 +53,7 @@ class PropertyPlan(BaseModel):
         description="Items where lead time matters (2-4 weeks ahead).",
     )
     action_class: ActionClass = "B"  # default to "draft only"
-    handoff_target: Literal["user", "note-maker", "smart-home-engineer", "errand-runner"] = "user"
+    handoff_target: Literal["user", "note-maker", "smart-home-operator", "errand-runner"] = "user"
 
 
 def _build_llm() -> BaseChatModel:
