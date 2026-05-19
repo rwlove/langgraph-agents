@@ -74,12 +74,12 @@ async def list_models() -> dict[str, Any]:
 
 _PER_AGENT_MODEL: dict[str, str] = {
     "triager": "qwen2.5:7b",
-    "reporter": "qwen2.5:7b",
+    "reporter": "qwen2.5:32b",
     "note-maker": "qwen2.5:7b",
-    "researcher": "qwen2.5:7b",
+    "researcher": "qwen2.5:32b",
     "coder": "qwen2.5:7b",
     "errand-runner": "qwen2.5:7b",
-    "supervisor": "qwen2.5:7b",
+    "supervisor": "qwen2.5:32b",
     "reviewer": "qwen2.5:7b",
     "homelab-engineer": "qwen2.5:7b",
     "network-operator": "qwen2.5:7b",
