@@ -108,6 +108,21 @@ class Settings(BaseSettings):
         default="postgresql://localhost:5432/langgraph_memory",
         description="Postgres connection string for pgvector memory store.",
     )
+    memory_backend: str = Field(
+        default="postgres",
+        description=(
+            "BaseStore backend. 'postgres' uses MCPMemoryStore against the "
+            "shared `kg.*` schema (cross-agent KG, see memory-mcp). 'none' "
+            "disables long-term store, falling back to in-message scratchpad."
+        ),
+    )
+    memory_embed_model: str = Field(
+        default="nomic-embed-text",
+        description=(
+            "Embedding model for MCPMemoryStore. Must produce 768-dim vectors "
+            "to match the kg.observations.embedding column."
+        ),
+    )
 
     # --- tools ---
     mcp_gateway_url: str = Field(

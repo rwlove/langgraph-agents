@@ -12,6 +12,7 @@ from typing import Any, cast
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.store.base import BaseStore
 
 from agents.nodes import NODES
 from agents.state import ALL_AGENT_IDS, ActionClass, AgentId, FleetState
@@ -104,11 +105,19 @@ def _route_after_supervisor(state: FleetState) -> AgentId | str:
     return target
 
 
-def build_fleet_graph(checkpointer: BaseCheckpointSaver[Any] | None = None) -> Any:
+def build_fleet_graph(
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
+    store: BaseStore | None = None,
+) -> Any:
     """Build + compile the fleet graph.
 
-    Pass a checkpointer in production (PostgresSaver). Pass None in tests to
-    run without persistence.
+    Args:
+      checkpointer: per-thread short-term state. PostgresSaver in prod,
+        MemorySaver / None in tests.
+      store: long-term cross-agent KG store (MCPMemoryStore in prod).
+        Passed through to `compile(store=...)`; agent nodes that ask
+        their `RunnableConfig` for `store` get this back. None disables
+        long-term store access.
     """
     builder = StateGraph(FleetState)
 
@@ -141,4 +150,4 @@ def build_fleet_graph(checkpointer: BaseCheckpointSaver[Any] | None = None) -> A
     supervisor_route_map[END] = END
     builder.add_conditional_edges("supervisor", _route_after_supervisor, supervisor_route_map)
 
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile(checkpointer=checkpointer, store=store)

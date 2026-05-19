@@ -22,8 +22,9 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from agents.api import admin, approval, chat_completions, health, inbox
 from agents.graphs.fleet import build_fleet_graph
+from agents.memory_store import MCPMemoryStore, build_pool
 from agents.observability import configure_structlog, metrics_text
-from agents.settings import get_settings
+from agents.settings import Settings, get_settings
 
 logger = logging.getLogger("agents")
 
@@ -58,6 +59,47 @@ async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]
     return await _try_postgres()
 
 
+async def _build_store(
+    stack: AsyncExitStack, settings: Settings
+) -> MCPMemoryStore | None:
+    """Build the long-term cross-agent KG store, or None to disable.
+
+    Disabled (returns None) when `memory_backend=none` or when the
+    memory Postgres is at localhost and not actually reachable (dev
+    convenience). The fleet graph compiles cleanly with `store=None` —
+    agents just don't get long-term store access.
+    """
+    if settings.memory_backend != "postgres":
+        logger.info("memory_backend=%s; long-term store disabled", settings.memory_backend)
+        return None
+
+    async def _try_open() -> MCPMemoryStore:
+        pool = await build_pool(settings.memory_postgres_url)
+        stack.push_async_callback(pool.close)
+        return MCPMemoryStore(
+            pool=pool,
+            ollama_base_url=settings.ollama_p40_url,
+            embed_model=settings.memory_embed_model,
+        )
+
+    if settings.memory_postgres_url.startswith("postgresql://localhost"):
+        try:
+            store = await _try_open()
+            logger.info("MCPMemoryStore connected (dev/localhost)")
+            return store
+        except Exception as exc:
+            logger.warning(
+                "MCPMemoryStore unavailable (%s); long-term store disabled", exc
+            )
+            return None
+
+    store = await _try_open()
+    logger.info(
+        "MCPMemoryStore connected (kg.*) — shared with memory-mcp Phase 0"
+    )
+    return store
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -72,8 +114,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     async with AsyncExitStack() as stack:
         checkpointer = await _build_checkpointer(stack)
-        app.state.graph = build_fleet_graph(checkpointer=checkpointer)
-        logger.info("fleet graph compiled; entrypoint=triager")
+        store = await _build_store(stack, settings)
+        app.state.graph = build_fleet_graph(
+            checkpointer=checkpointer, store=store
+        )
+        logger.info(
+            "fleet graph compiled; entrypoint=triager; store=%s",
+            "MCPMemoryStore" if store is not None else "disabled",
+        )
         yield
         logger.info("shutting down")
 
