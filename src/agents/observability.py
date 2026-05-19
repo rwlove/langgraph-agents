@@ -182,22 +182,36 @@ def llm_timer() -> Iterator[dict[str, float]]:
 class LangGraphMetricsCallback(BaseCallbackHandler):
     """Emits the four langgraph_* metrics on each chat-model run.
 
-    Required metadata on the run config:
+    Labels (``agent``, ``group``, ``model``, ``trigger``) are supplied at
+    construction so they survive any chain wrapping (e.g. ``with_structured
+    _output``). The factory creates a fresh handler per llm() call with the
+    correct per-agent labels and attaches it as an intrinsic model callback
+    (``ChatOllama(callbacks=[handler], ...)``) — that path fires reliably,
+    whereas ``with_config(callbacks=[...])`` followed by ``with_structured_
+    output()`` silently drops the callback (verified empirically against
+    langchain-core 0.3+).
 
-    - ``agent``: str — agent_id (one of ``AgentId``)
-    - ``group``: str — model group (``local-spark`` | ``local-p40`` | ``claude``)
-    - ``model``: str — concrete model name (e.g. ``qwen2.5:32b``)
-    - ``trigger`` (optional): str — for Claude-leg calls only
-
-    Attach via ``.with_config(callbacks=[LangGraphMetricsCallback()])`` in the
-    Phase 2 factory; the agent/group/model fields flow via the same config's
-    ``metadata`` map.
+    A previous version of this handler relied on ``metadata`` propagated via
+    ``with_config(metadata={...})`` — that approach was abandoned because
+    LangChain's internal ``ls_*`` metadata wins the merge and user metadata
+    is dropped at the ``on_chat_model_start`` / ``on_llm_end`` boundary.
     """
 
     raise_error = False
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        agent: str,
+        group: str,
+        model: str,
+        trigger: str = "",
+    ) -> None:
         super().__init__()
+        self.agent = agent
+        self.group = group
+        self.model = model
+        self.trigger = trigger
         self._starts: dict[UUID, float] = {}
 
     def on_llm_start(
@@ -226,16 +240,9 @@ class LangGraphMetricsCallback(BaseCallbackHandler):
         response: LLMResult,
         *,
         run_id: UUID,
-        metadata: dict[str, Any] | None = None,
         **_: Any,
     ) -> None:
         duration = time.perf_counter() - self._starts.pop(run_id, time.perf_counter())
-        meta = metadata or {}
-        agent = str(meta.get("agent", "unknown"))
-        group = str(meta.get("group", "unknown"))
-        model = str(meta.get("model", "unknown"))
-        trigger = str(meta.get("trigger", ""))
-
         tokens_in = 0
         tokens_out = 0
         if response.llm_output:
@@ -246,11 +253,11 @@ class LangGraphMetricsCallback(BaseCallbackHandler):
             tokens_out = int(usage.get("completion_tokens", 0) or 0)
 
         record_llm_call(
-            agent=agent,
-            group=group,
-            model=model,
+            agent=self.agent,
+            group=self.group,
+            model=self.model,
             outcome="success",
-            trigger=trigger,
+            trigger=self.trigger,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             duration_seconds=duration,
@@ -261,17 +268,15 @@ class LangGraphMetricsCallback(BaseCallbackHandler):
         error: BaseException,
         *,
         run_id: UUID,
-        metadata: dict[str, Any] | None = None,
         **_: Any,
     ) -> None:
         duration = time.perf_counter() - self._starts.pop(run_id, time.perf_counter())
-        meta = metadata or {}
         record_llm_call(
-            agent=str(meta.get("agent", "unknown")),
-            group=str(meta.get("group", "unknown")),
-            model=str(meta.get("model", "unknown")),
+            agent=self.agent,
+            group=self.group,
+            model=self.model,
             outcome="error",
-            trigger=str(meta.get("trigger", "")),
+            trigger=self.trigger,
             duration_seconds=duration,
         )
 
