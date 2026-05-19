@@ -67,7 +67,7 @@ def check_operator(slug: str) -> list[str]:
     if not vault_dir.is_dir():
         findings.append(f"  MISSING vault dir: {vault_dir}")
         return findings  # nothing more to check
-    for name, path in (("SOUL.md", soul), ("IDENTITY.md", identity), ("AGENTS.md", agents)):
+    for _name, path in (("SOUL.md", soul), ("IDENTITY.md", identity), ("AGENTS.md", agents)):
         if not path.is_file():
             findings.append(f"  MISSING vault file: {path}")
 

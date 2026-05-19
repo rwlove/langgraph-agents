@@ -38,7 +38,6 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-import psycopg
 from langgraph.store.base import (
     BaseStore,
     GetOp,
@@ -122,7 +121,7 @@ class MCPMemoryStore(BaseStore):
     paths in the runtime, and this store is wired in async land only.
     """
 
-    __slots__ = ("_pool", "_ollama_url", "_embed_model")
+    __slots__ = ("_embed_model", "_ollama_url", "_pool")
 
     def __init__(
         self,
