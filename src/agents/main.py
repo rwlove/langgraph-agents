@@ -19,6 +19,7 @@ from fastapi import FastAPI, Response
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg_pool import AsyncConnectionPool
 
 from agents.api import admin, approval, chat_completions, health, inbox
 from agents.graphs.fleet import build_fleet_graph
@@ -32,16 +33,43 @@ logger = logging.getLogger("agents")
 async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]:
     """Return a checkpointer suitable for the runtime environment.
 
-    Production: Postgres. Dev (no reachable Postgres): in-memory.
+    Production: Postgres via `AsyncConnectionPool`. Dev (no reachable
+    Postgres): in-memory.
 
-    The Postgres saver is an async context manager; entering it via the
-    AsyncExitStack ensures the connection pool is cleaned up on shutdown.
+    The pool is entered via the AsyncExitStack so it's cleaned up on
+    shutdown. The pool — NOT a single `AsyncConnection` from
+    `from_conn_string` — is the supported path here: psycopg's pool
+    health-checks connections before yielding them, transparently
+    replacing any that have gone half-open (e.g. silently dropped by
+    Cilium conntrack or NAT idle timeouts during long pod idle
+    periods). The single-connection variant hangs forever on first-use
+    after a long idle window — see the v0.2.11 reporter-route hang
+    forensics (idle conn aged 88min on cluster postgres before the
+    next aget_tuple parked on the dead socket).
+
+    `autocommit=True` + `prepare_threshold=0` mirror the kwargs
+    langgraph-checkpoint-postgres uses internally for its own
+    connections; the saver manages transactions itself and uses its
+    own prepared-statement registry.
     """
     settings = get_settings()
 
     async def _try_postgres() -> BaseCheckpointSaver[Any]:
-        cm = AsyncPostgresSaver.from_conn_string(settings.postgres_url)
-        saver = await stack.enter_async_context(cm)
+        pool = AsyncConnectionPool(
+            conninfo=settings.postgres_url,
+            min_size=1,
+            max_size=10,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+            # `check` runs SELECT 1 before yielding a conn — a dead conn
+            # (silent conntrack expiry, server-side terminate, NAT idle
+            # drop) fails the check and gets replaced, instead of being
+            # handed out and parking the next aget_tuple. This is the
+            # behavior the v0.2.11 hang needed.
+            check=AsyncConnectionPool.check_connection,
+            open=False,
+        )
+        await stack.enter_async_context(pool)
+        saver = AsyncPostgresSaver(conn=pool)  # type: ignore[arg-type]
         await saver.setup()
         return saver
 
