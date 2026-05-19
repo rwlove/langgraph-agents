@@ -137,18 +137,19 @@ class MCPMemoryStore(BaseStore):
     # BaseStore interface
     # ------------------------------------------------------------------
 
-    def batch(self, ops: Iterable[Op]) -> list[Any]:  # type: ignore[override]
+    def batch(self, ops: Iterable[Op]) -> list[Any]:
         raise NotImplementedError(
             "MCPMemoryStore is async-only. Use abatch() / aget() / aput() / etc."
         )
 
-    async def abatch(self, ops: Iterable[Op]) -> list[Any]:  # type: ignore[override]
+    async def abatch(self, ops: Iterable[Op]) -> list[Any]:
         results: list[Any] = []
         for op in ops:
             if isinstance(op, GetOp):
                 results.append(await self._aget(op))
             elif isinstance(op, PutOp):
-                results.append(await self._aput(op))
+                await self._aput(op)
+                results.append(None)
             elif isinstance(op, SearchOp):
                 results.append(await self._asearch(op))
             elif isinstance(op, ListNamespacesOp):
@@ -238,6 +239,10 @@ class MCPMemoryStore(BaseStore):
                         (ename, ENTITY_TYPE, ens, source_json),
                     )
                     row = await cur.fetchone()
+                    if row is None:
+                        raise RuntimeError(
+                            f"upsert returned no row for entity '{ename}'"
+                        )
                     entity_id = row["id"]
 
                     if vector is None:
@@ -407,7 +412,7 @@ class MCPMemoryStore(BaseStore):
                 rows = data.get("embeddings") or []
                 if not rows or not rows[0]:
                     return None
-                return rows[0]
+                return list(rows[0])
         except Exception:
             logger.exception("MCPMemoryStore: embed failed; storing NULL")
             return None
