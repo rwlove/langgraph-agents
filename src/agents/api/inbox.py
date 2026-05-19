@@ -48,12 +48,15 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     config = {"configurable": {"thread_id": req.task_id}}
 
     # Run the graph. If it interrupts, the returned state has the interrupt
-    # payload accessible via the graph's `get_state(config).next` and tasks
+    # payload accessible via the graph's `aget_state(config).next` and tasks
     # info; for phase 1 we surface state.output directly.
     final = await graph.ainvoke(initial_state, config=config)
 
     # Detect pause: LangGraph returns the partial state at interrupt point.
-    state_snapshot = graph.get_state(config)
+    # MUST use aget_state (async) — the checkpointer is AsyncPostgresSaver,
+    # and sync get_state from the main async event loop raises
+    # asyncio.InvalidStateError.
+    state_snapshot = await graph.aget_state(config)
     interrupts = state_snapshot.tasks[0].interrupts if state_snapshot.tasks else ()
 
     if interrupts:
