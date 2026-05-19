@@ -8,6 +8,28 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    services:
+      # Postgres for the AsyncConnectionPool integration test
+      # (tests/integration/test_checkpoint_pool.py). Skipped locally
+      # unless POSTGRES_TEST_URL is exported.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: langgraph
+          POSTGRES_PASSWORD: langgraph
+          POSTGRES_DB: langgraph_checkpoints_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U langgraph -d langgraph_checkpoints_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      POSTGRES_TEST_URL: postgresql://langgraph:langgraph@localhost:5432/langgraph_checkpoints_test
+
     steps:
       - uses: actions/checkout@v4
 
