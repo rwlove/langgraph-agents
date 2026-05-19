@@ -107,7 +107,9 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
                 req.task_id,
                 exc,
             )
-        except Exception:  # noqa: BLE001 — best-effort post-back
+        except Exception:
+            # Best-effort post-back: never fail the request because the
+            # secondary Zulip POST broke.
             logger.exception(
                 "zulip-reply unexpected failure task=%s", req.task_id
             )
