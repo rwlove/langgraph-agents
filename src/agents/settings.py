@@ -139,6 +139,17 @@ class Settings(BaseSettings):
     pushover_app_token: str | None = Field(default=None)
     pushover_user_key: str | None = Field(default=None)
 
+    # --- zulip reply-as-triager ---
+    # When /inbox is called with source="zulip" and a zulip_user_id, the
+    # handler posts the final output as a DM from the triager bot back
+    # to that user. Empty values disable the post-back (best-effort).
+    zulip_host: str | None = Field(
+        default=None,
+        description="Zulip realm host (e.g. chat.thesteamedcrab.com). No scheme.",
+    )
+    zulip_triager_email: str | None = Field(default=None)
+    zulip_triager_api_key: str | None = Field(default=None)
+
     # --- approval signing (HMAC shared with n8n approval-broker) ---
     langgraph_approval_signing_key: str | None = Field(
         default=None,

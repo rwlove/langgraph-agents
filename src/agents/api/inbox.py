@@ -1,19 +1,27 @@
-"""POST /inbox — n8n calls this when a new inbox entry lands.
+"""POST /inbox — Windmill calls this when a new inbox entry lands.
 
 Runs the full fleet graph. Returns the task_id immediately; the graph runs
 async and persists state via the checkpointer. If the graph pauses on an
-approval interrupt, the response includes the pause info so n8n can post
+approval interrupt, the response includes the pause info so Windmill can post
 the approval request to Zulip.
+
+When `source="zulip"` and `zulip_user_id` is set, the handler additionally
+DMs the graph's final output back to that Zulip user via the triager-bot
+identity — the user-visible reply lands in the same DM thread they started.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from agents.state import FleetState, Source
+from agents.tools.zulip import ZulipNotConfiguredError, send_dm
+
+logger = logging.getLogger("agents.api.inbox")
 
 router = APIRouter(prefix="", tags=["inbox"])
 
@@ -23,6 +31,12 @@ class InboxRequest(BaseModel):
     source: Source
     content: str
     user: str = "rob"
+    # Optional Zulip routing — when set, the handler DMs the graph's
+    # output back to this user_id via the triager-bot identity on
+    # graph completion (best-effort; failures logged not raised).
+    # The Windmill `zulip-triager-webhook` script passes
+    # `message.sender_id` here.
+    zulip_user_id: int | None = None
 
 
 class InboxResponse(BaseModel):
@@ -60,14 +74,46 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     interrupts = state_snapshot.tasks[0].interrupts if state_snapshot.tasks else ()
 
     if interrupts:
+        # On pause, we let Windmill's approval-post flow handle the user-
+        # visible message — don't DM here. The approval-post topic carries
+        # the full request and the action buttons.
         return InboxResponse(
             task_id=req.task_id,
             status="paused",
             paused_for=dict(interrupts[0].value) if interrupts[0].value else None,
         )
 
+    output = final.get("output")
+
+    # Zulip reply-back path: only fires when the caller is the triager-bot
+    # outgoing-webhook and the request carried a user_id to reply to.
+    if (
+        req.source == "zulip"
+        and req.zulip_user_id is not None
+        and output
+    ):
+        try:
+            result = send_dm(req.zulip_user_id, output)
+            logger.info(
+                "zulip-reply task=%s user_id=%s status=%s msg_id=%s",
+                req.task_id,
+                req.zulip_user_id,
+                result.status_code,
+                result.msg_id,
+            )
+        except ZulipNotConfiguredError as exc:
+            logger.warning(
+                "zulip-reply skipped (config missing) task=%s: %s",
+                req.task_id,
+                exc,
+            )
+        except Exception:  # noqa: BLE001 — best-effort post-back
+            logger.exception(
+                "zulip-reply unexpected failure task=%s", req.task_id
+            )
+
     return InboxResponse(
         task_id=req.task_id,
         status="complete",
-        output=final.get("output"),
+        output=output,
     )
