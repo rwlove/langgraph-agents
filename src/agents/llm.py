@@ -185,7 +185,7 @@ def _build_ollama(
     effective_group: ModelGroup,
     temperature: float,
 ) -> BaseChatModel:
-    """Build a ChatOllama client with metadata + metrics callback pre-bound.
+    """Build a ChatOllama client with the metrics callback pre-attached.
 
     base_url should NOT contain /v1 suffix. Defensive: if a legacy /v1 suffix
     leaks in (e.g. someone sets ollama_p40_url to the old OpenAI-compat URL),
@@ -195,10 +195,21 @@ def _build_ollama(
     requested via AGENT_GROUP) — a `local-spark` request that degraded to P40
     arrives here with `effective_group="local-p40"` so the metric labels
     reflect reality.
+
+    Callback is attached as an INTRINSIC model callback (the model's own
+    `callbacks` field) — survives `with_structured_output()` chain wrapping.
+    Verified empirically that `with_config(callbacks=[...])` does NOT survive
+    `with_structured_output`: the resulting RunnableSequence drops the
+    callback, so we don't use that pattern.
     """
     base_url = base_url.removesuffix("/v1").rstrip("/")
-    base = ChatOllama(model=model, base_url=base_url, temperature=temperature)
-    return _attach_observability(base, agent_id=agent_id, group=effective_group, model=model)
+    handler = LangGraphMetricsCallback(agent=agent_id, group=effective_group, model=model)
+    return ChatOllama(
+        model=model,
+        base_url=base_url,
+        temperature=temperature,
+        callbacks=[handler],
+    )
 
 
 def _build_claude(
@@ -213,38 +224,14 @@ def _build_claude(
     if settings.anthropic_api_key is None:
         msg = "ANTHROPIC_API_KEY required for Claude path but is None"
         raise RuntimeError(msg)
-    base = ChatAnthropic(  # type: ignore[call-arg]
+    handler = LangGraphMetricsCallback(
+        agent=agent_id, group=effective_group, model=settings.claude_model
+    )
+    return ChatAnthropic(  # type: ignore[call-arg]
         model=settings.claude_model,
         api_key=SecretStr(settings.anthropic_api_key),
         temperature=temperature,
-    )
-    return _attach_observability(
-        base, agent_id=agent_id, group=effective_group, model=settings.claude_model
-    )
-
-
-def _attach_observability(
-    chat_model: BaseChatModel,
-    *,
-    agent_id: AgentId,
-    group: ModelGroup,
-    model: str,
-) -> BaseChatModel:
-    """Wrap the chat model with metadata + metrics callback pre-bound.
-
-    Returns a RunnableBinding that still supports `.with_structured_output(...)`
-    via attribute proxy — verified empirically. The bound `metadata` flows to
-    `LangGraphMetricsCallback.on_llm_end` so the Prometheus counters get the
-    correct labels per invocation without per-call-site config plumbing.
-
-    Trigger label is intentionally NOT set here — the factory's `escalate=True`
-    path and the degraded-mode-escalation path each emit their own concrete
-    trigger via a wrapping `record_llm_call(...)` if needed. (For Phase 2
-    rollout we don't trigger-tag yet; that lands in Phase 6 enablement.)
-    """
-    return chat_model.with_config(  # type: ignore[return-value]
-        metadata={"agent": agent_id, "group": group, "model": model},
-        callbacks=[LangGraphMetricsCallback()],
+        callbacks=[handler],
     )
 
 

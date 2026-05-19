@@ -85,16 +85,15 @@ def test_record_llm_call_emits_all_four_metrics() -> None:
 
 
 def test_callback_emits_on_llm_end() -> None:
-    cb = LangGraphMetricsCallback()
+    cb = LangGraphMetricsCallback(agent="cb-test", group="local", model="y")
     run_id = uuid4()
-    metadata = {"agent": "cb-test", "group": "local", "model": "y"}
 
-    cb.on_llm_start(serialized={}, prompts=["hello"], run_id=run_id, metadata=metadata)
+    cb.on_llm_start(serialized={}, prompts=["hello"], run_id=run_id)
     fake_result = LLMResult(
         generations=[[Generation(text="hi")]],
         llm_output={"token_usage": {"prompt_tokens": 5, "completion_tokens": 1}},
     )
-    cb.on_llm_end(fake_result, run_id=run_id, metadata=metadata)
+    cb.on_llm_end(fake_result, run_id=run_id)
 
     calls = langgraph_calls_total.labels(
         agent="cb-test", group="local", model="y", outcome="success", trigger=""
@@ -107,12 +106,11 @@ def test_callback_emits_on_llm_end() -> None:
 
 
 def test_callback_on_llm_error_records_error_outcome() -> None:
-    cb = LangGraphMetricsCallback()
+    cb = LangGraphMetricsCallback(agent="cb-err", group="local", model="z")
     run_id = uuid4()
-    metadata = {"agent": "cb-err", "group": "local", "model": "z"}
 
-    cb.on_llm_start(serialized={}, prompts=["hello"], run_id=run_id, metadata=metadata)
-    cb.on_llm_error(RuntimeError("boom"), run_id=run_id, metadata=metadata)
+    cb.on_llm_start(serialized={}, prompts=["hello"], run_id=run_id)
+    cb.on_llm_error(RuntimeError("boom"), run_id=run_id)
 
     errors = langgraph_calls_total.labels(
         agent="cb-err", group="local", model="z", outcome="error", trigger=""
