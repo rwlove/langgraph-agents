@@ -17,6 +17,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from agents.paused_threads import (
+    DEFAULT_STALE_AFTER_SECONDS,
+    sweep_paused_threads,
+)
 from agents.personas import load_identity
 from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS, TimeoutTier
@@ -203,6 +207,46 @@ async def costs_today() -> CostSummary:
         daily_cap_usd=settings.cost_cap_global_daily_usd,
         per_agent=per_agent,
         date=today,
+    )
+
+
+# --- paused-thread sweep (P3.7) ---
+
+
+class PausedThreadInterrupt(BaseModel):
+    id: str | None = None
+    value: dict[str, Any] | None = None
+
+
+class PausedThread(BaseModel):
+    thread_id: str
+    paused_since: str | None = None
+    paused_for_seconds: float | None = None
+    is_stale: bool
+    interrupts: list[PausedThreadInterrupt]
+    next: list[str]
+
+
+@router.get("/paused-threads", response_model=list[PausedThread])
+async def list_paused_threads(
+    request: Request,
+    stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+) -> list[dict[str, Any]]:
+    """Re-run the paused-thread sweep on demand.
+
+    Same logic that runs on pod startup (see
+    ``agents.paused_threads.sweep_paused_threads``). Diagnostic-only —
+    no resume / cancel side effects.
+
+    The startup sweep logs each stale thread once per pod lifetime;
+    this endpoint lets the operator or a future cost-cap-watcher
+    poll for the current inventory without restarting the pod.
+    """
+    graph = request.app.state.graph
+    if graph is None:
+        raise HTTPException(status_code=503, detail="graph not initialized")
+    return await sweep_paused_threads(
+        graph, stale_after_seconds=stale_after_seconds
     )
 
 

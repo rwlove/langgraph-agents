@@ -31,6 +31,7 @@ from agents.observability import (
     init_langfuse,
     metrics_text,
 )
+from agents.paused_threads import startup_log_paused_threads
 from agents.settings import Settings, get_settings
 from agents.state import (
     ActivityLogEntry,
@@ -226,6 +227,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "fleet graph compiled; entrypoint=triager; store=%s",
             "MCPMemoryStore" if store is not None else "disabled",
         )
+
+        # P3.7: diagnostic sweep — log any threads paused at interrupt()
+        # that survived the pod restart. Read-only; auto-resume is a
+        # follow-up once P1.2 wires interrupt() into class-C/D nodes.
+        # Never fails startup (sweep helper swallows its own errors).
+        await startup_log_paused_threads(app.state.graph)
+
         yield
         logger.info("shutting down")
         flush_langfuse()
