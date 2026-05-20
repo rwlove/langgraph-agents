@@ -44,7 +44,7 @@ from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from agents.observability import get_logger
+from agents.observability import get_logger, langgraph_paused_threads
 
 slog = get_logger("paused_threads")
 
@@ -61,6 +61,20 @@ DEFAULT_LOG_CAP = 100
 # long enough that a thread that was just paused (mid-restart) doesn't
 # get flagged.
 DEFAULT_STALE_AFTER_SECONDS = 300
+
+
+def _update_gauge(threads: list[dict[str, Any]]) -> None:
+    """Update the ``langgraph_paused_threads`` Gauge from a sweep result.
+
+    Sets both label values on every call so the metric reflects the
+    current truth, not a monotonic max. Called once per sweep —
+    callers don't need to invoke this directly.
+    """
+    stale_count = sum(1 for t in threads if t["is_stale"])
+    langgraph_paused_threads.labels(is_stale="true").set(stale_count)
+    langgraph_paused_threads.labels(is_stale="false").set(
+        len(threads) - stale_count
+    )
 
 
 async def _parse_created_at(value: str | None) -> datetime | None:
@@ -106,6 +120,7 @@ async def sweep_paused_threads(
     checkpointer = getattr(graph, "checkpointer", None)
     if checkpointer is None or isinstance(checkpointer, MemorySaver):
         slog.info("paused_threads_sweep_skipped", reason="in_memory_checkpointer")
+        _update_gauge([])
         return []
 
     now = datetime.now(UTC)
@@ -158,6 +173,7 @@ async def sweep_paused_threads(
         if limit is not None and len(out) >= limit:
             break
 
+    _update_gauge(out)
     return out
 
 
