@@ -4,10 +4,15 @@ Routes each agent to the right model on the right service. Per-group fallback
 for Spark→P40 degraded routing. Claude escalation when explicitly requested or
 when the degraded-mode-escalation flag is on AND both local paths are down.
 
-Group enum mirrors `plan.md` v55 — `local-p40` | `local-spark` | `claude`.
+Group enum: `local-p40` | `local-spark` | `local-spark-coder` | `claude`.
 Agents are assigned to groups via `AGENT_GROUP`; light/mechanical agents go
-to P40 (qwen2.5:7b), reasoning/structured-output agents go to Spark
-(qwen2.5:32b), no agent defaults to Claude.
+to P40 (qwen2.5:7b), reasoning/structured-output agents go to Spark general
+(qwen2.5:32b), code-focused agents (`coder`, `reviewer`) go to Spark coder
+(qwen2.5-coder:32b). No agent defaults to Claude.
+
+`local-spark-coder` and `local-spark` share the same Ollama instance on
+Spark — only the model name differs. Spark's MAX_LOADED_MODELS=3 lets both
+sit resident so swap cost is negligible.
 
 Health-tracker is HARD-PINNED to local-only — the memory constraint
 (`feedback_health_data_stays_local`-spirit, captured in IDENTITY.md) forbids
@@ -38,7 +43,7 @@ if TYPE_CHECKING:
     from agents.state import AgentId
 
 
-ModelGroup = Literal["local-p40", "local-spark", "claude"]
+ModelGroup = Literal["local-p40", "local-spark", "local-spark-coder", "claude"]
 
 
 class LocalOllamaUnavailable(RuntimeError):
@@ -114,6 +119,7 @@ class CostCapHit(RuntimeError):
 GROUP_MODELS: dict[ModelGroup, str] = {
     "local-p40": "qwen2.5:7b",
     "local-spark": "qwen2.5:32b",
+    "local-spark-coder": "qwen2.5-coder:32b",
     "claude": "",  # set per-call from settings.claude_model
 }
 
@@ -130,8 +136,8 @@ AGENT_GROUP: dict[AgentId, ModelGroup] = {
     "property-coordinator": "local-p40",
     "health-tracker": "local-p40",
     "doc-writer": "local-p40",
-    "coder": "local-spark",
-    "reviewer": "local-spark",
+    "coder": "local-spark-coder",
+    "reviewer": "local-spark-coder",
     "homelab-engineer": "local-spark",
     "network-operator": "local-spark",
     "storage-operator": "local-spark",
@@ -157,8 +163,9 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
       `local-p40`.
     - If `escalate=True` AND ANTHROPIC_API_KEY is set, return Claude.
     - Otherwise use the per-agent group from `AGENT_GROUP` (or `group_override`).
-    - `local-spark`: fall back to `local-p40` if Spark unhealthy (degraded
-      routing — qwen2.5:7b instead of 32b). If both local paths are down AND
+    - `local-spark` / `local-spark-coder`: fall back to `local-p40` if Spark
+      unhealthy (degraded routing — qwen2.5:7b instead of the 32b general or
+      coder model). If both local paths are down AND
       `degraded_mode_escalation_enabled=True`, escalate to Claude. Else raise
       `LocalOllamaUnavailable`.
     - `local-p40`: no Blackwell fallback (running light agents on the 32b model
@@ -195,19 +202,21 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
             settings, agent_id, "claude", temperature=temperature, trigger=trigger
         )
 
-    if group == "local-spark":
+    if group in ("local-spark", "local-spark-coder"):
         if service_healthy(settings.ollama_spark_url):
             return _build_ollama(
                 settings.ollama_spark_url,
-                GROUP_MODELS["local-spark"],
+                GROUP_MODELS[group],
                 agent_id=agent_id,
-                effective_group="local-spark",
+                effective_group=group,
                 temperature=temperature,
                 trigger=trigger,
             )
         # Spark unhealthy — degrade to P40 (quality loss, no escalation).
         # effective_group="local-p40" so the metric label reflects what's
-        # actually serving the request, not what was requested.
+        # actually serving the request, not what was requested. Coder-flavored
+        # requests degrade to the same P40 7b general model — qwen2.5:7b's
+        # coding ability is weak, but at least the request doesn't fail.
         if service_healthy(settings.ollama_p40_url):
             return _build_ollama(
                 settings.ollama_p40_url,
@@ -221,7 +230,7 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
             return _build_claude(
                 settings, agent_id, "claude", temperature=temperature, trigger=trigger
             )
-        raise LocalOllamaUnavailable(group, agent_id, failed_group="local-spark")
+        raise LocalOllamaUnavailable(group, agent_id, failed_group=group)
 
     # group == "local-p40"
     if service_healthy(settings.ollama_p40_url):

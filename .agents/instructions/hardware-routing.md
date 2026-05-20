@@ -8,6 +8,7 @@ The `agents.llm.llm(agent_id)` factory is the single source of truth for which m
 |---|---|---|---|
 | `local-p40` | `http://ollama.ai.svc.cluster.local:11434` | `qwen2.5:7b` | P40 (24 GiB VRAM, Pascal era) — ≤8b model cap per `project_p40_model_size_cap` |
 | `local-spark` | `http://ollama-spark.ai.svc.cluster.local:11434` | `qwen2.5:32b` | NVIDIA Spark / GB10 (Grace-Blackwell) — DCGM counters partly broken; see `reference_dcgm_gb10_broken_counters` |
+| `local-spark-coder` | `http://ollama-spark.ai.svc.cluster.local:11434` | `qwen2.5-coder:32b` | Same Spark / GB10 instance as `local-spark`. Coder-tuned model for code-focused agents; Spark's `OLLAMA_MAX_LOADED_MODELS=3` lets both 32b models sit resident |
 | `claude` | Anthropic API | `settings.claude_model` (default `claude-opus-4-7`) | Off-cluster |
 
 ## Per-agent assignment (`AGENT_GROUP`)
@@ -23,8 +24,8 @@ The `agents.llm.llm(agent_id)` factory is the single source of truth for which m
 | reporter | local-spark | Aggregates activity logs; needs context length + reasoning |
 | researcher | local-spark | Multi-step reasoning + tool use |
 | supervisor | local-spark | Cascade-decision reasoning |
-| coder | local-spark | Code generation + critique |
-| reviewer | local-spark | Code-review reasoning |
+| coder | local-spark-coder | Code generation + critique on coder-tuned 32b |
+| reviewer | local-spark-coder | Code-review reasoning on coder-tuned 32b |
 | homelab-engineer | local-spark | Cross-domain reasoning over k8s/Flux/infra |
 | network-operator | local-spark | Policy + topology reasoning |
 | storage-operator | local-spark | Multi-backend tradeoff reasoning |
@@ -36,11 +37,11 @@ The `agents.llm.llm(agent_id)` factory is the single source of truth for which m
 
 1. **`health-tracker` is local-only.** Explicit `escalate=True` or `group_override="claude"` is silently downgraded to `local-p40`.
 2. **`escalate=True` + `ANTHROPIC_API_KEY` present** → Claude, regardless of `AGENT_GROUP`.
-3. **`group == "local-spark"`**:
-   - Spark healthy → Spark + qwen2.5:32b.
-   - Spark unhealthy, P40 healthy → degrade to P40 + qwen2.5:7b (logged; metric `effective_group=local-p40` reflects what served).
+3. **`group == "local-spark"` or `group == "local-spark-coder"`** (same Spark instance, different model):
+   - Spark healthy → Spark + the group's model (general `qwen2.5:32b` or `qwen2.5-coder:32b`).
+   - Spark unhealthy, P40 healthy → degrade to P40 + qwen2.5:7b (logged; metric `effective_group=local-p40` reflects what served). Coder requests degrade to the same general 7b — weak at code, but the request doesn't fail.
    - Both down, `degraded_mode_escalation_enabled=True`, key present → Claude.
-   - Both down, escalation disabled → raise `LocalOllamaUnavailable`. `/inbox` catches and queues the task for retry (see `agents.queue`).
+   - Both down, escalation disabled → raise `LocalOllamaUnavailable` with `failed_group` equal to the originally-requested group. `/inbox` catches and queues the task for retry (see `agents.queue`).
 4. **`group == "local-p40"`**:
    - P40 healthy → P40 + qwen2.5:7b.
    - P40 unhealthy, degraded-escalation on, key present → Claude.
@@ -56,6 +57,6 @@ The `agents.llm.llm(agent_id)` factory is the single source of truth for which m
 
 ## chat_completions delegates to the factory
 
-`api/chat_completions.py` (the OpenWebUI surface) calls `agents.llm.llm(agent_id, trigger="openwebui")` for every request. Same per-agent Spark/P40 routing as the /inbox + scheduled-graph paths; Spark-class agents (reporter, researcher, supervisor, coder, reviewer, the four operator agents) get qwen2.5:32b on the Spark endpoint instead of qwen2.5:7b on P40.
+`api/chat_completions.py` (the OpenWebUI surface) calls `agents.llm.llm(agent_id, trigger="openwebui")` for every request. Same per-agent Spark/P40 routing as the /inbox + scheduled-graph paths; reasoning agents (reporter, researcher, supervisor, the five operator agents) get qwen2.5:32b on Spark, code agents (coder, reviewer) get qwen2.5-coder:32b on the same Spark endpoint, light agents get qwen2.5:7b on P40.
 
 The `trigger="openwebui"` propagates to `LangGraphMetricsCallback`'s `trigger` label on `langgraph_calls_total` so Grafana panels filtering on that label keep working. The Langfuse callback also lands on OpenWebUI chats now (same factory attachment), so per-task traces show up alongside /inbox runs in the trace UI.
