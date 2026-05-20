@@ -12,6 +12,7 @@ from agents.state import (
     ApprovalRequest,
     FleetState,
     RejectionSignal,
+    RetryPolicy,
     TriageDecision,
 )
 
@@ -116,3 +117,81 @@ def test_fleet_state_minimal_constructible() -> None:
     assert state.task_id == "t-001"
     assert state.cascade_count == 0
     assert state.triage is None
+
+
+# --- Task envelope (HOMELAB-SPEC Layer 5; additive) -------------------------
+
+
+def test_fleet_state_envelope_defaults() -> None:
+    """Old callers (no envelope fields) get the documented defaults."""
+    state = FleetState(task_id="t-001", source="test", content="hi")
+    assert state.priority == "normal"
+    assert state.data_tier == "internal"
+    assert state.trace_id is None
+    assert state.origin is None
+    assert state.requester is None
+    assert state.intent_envelope is None
+    assert state.destructive is None
+    assert state.idempotency_key is None
+    assert state.ttl_seconds is None
+    assert state.retry_policy is None
+
+
+def test_fleet_state_envelope_full() -> None:
+    """New callers can populate the full envelope."""
+    state = FleetState(
+        task_id="t-002",
+        source="openwebui",
+        content="hi",
+        trace_id="01HXYZABC",
+        origin="open-webui",
+        requester="rob",
+        intent_envelope="action",
+        priority="urgent",
+        destructive=True,
+        idempotency_key="dedup-key",
+        ttl_seconds=600,
+        retry_policy=RetryPolicy(max_attempts=3, backoff_seconds=5),
+        data_tier="restricted",
+    )
+    assert state.priority == "urgent"
+    assert state.data_tier == "restricted"
+    assert state.trace_id == "01HXYZABC"
+    assert state.requester == "rob"
+    assert state.retry_policy is not None
+    assert state.retry_policy.max_attempts == 3
+
+
+def test_fleet_state_envelope_rejects_invalid_enum() -> None:
+    """Typed enums reject unknown values."""
+    with pytest.raises(ValidationError):
+        FleetState(
+            task_id="t-003",
+            source="test",
+            content="hi",
+            priority="critical",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError):
+        FleetState(
+            task_id="t-004",
+            source="test",
+            content="hi",
+            data_tier="secret",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError):
+        FleetState(
+            task_id="t-005",
+            source="test",
+            content="hi",
+            requester="anonymous",  # type: ignore[arg-type]
+        )
+
+
+def test_retry_policy_bounds() -> None:
+    """max_attempts >= 1 and backoff_seconds >= 0."""
+    RetryPolicy(max_attempts=1, backoff_seconds=0)
+    RetryPolicy(max_attempts=5, backoff_seconds=10)
+    with pytest.raises(ValidationError):
+        RetryPolicy(max_attempts=0)
+    with pytest.raises(ValidationError):
+        RetryPolicy(backoff_seconds=-1)
