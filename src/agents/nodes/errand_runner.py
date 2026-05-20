@@ -20,6 +20,7 @@ import json
 from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langgraph.types import interrupt
 from pydantic import BaseModel
 
 from agents.llm import llm
@@ -31,7 +32,7 @@ from agents.tools.mcp import MCPGatewayClient, MCPPermissionError, is_allowed
 _AGENT_ID: AgentId = "errand-runner"
 _TEMPERATURE = 0.0  # deterministic — we're verifying + executing, not generating
 
-Outcome = Literal["executed", "rejected", "preflight-failed", "no-approval"]
+Outcome = Literal["executed", "rejected", "preflight-failed", "no-approval", "deferred"]
 
 
 class ExecutionResult(BaseModel):
@@ -91,10 +92,19 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
 
     Required state fields:
       - approval_request: ApprovalRequest with target = "server.method"
-      - approval_token: signed token from n8n
+      - approval_token: signed token from n8n (or from the /approval resume)
       - approval_granted: True (or this node refuses)
 
     If no approval_request is set, the request was misrouted — reject.
+
+    Approval lifecycle inside this node:
+      - approval_granted is None    → pause via ``interrupt(req.model_dump())``;
+        ``/approval`` resumes with ``{granted, deferred, approval_token, actor}``.
+      - resume verdict ``deferred`` → return a deferred-output message (the
+        supervisor can re-route or escalate later).
+      - resume verdict ``granted=False`` → return rejected-output message.
+      - resume verdict ``granted=True`` → fall through to the existing
+        token-verification + execute path.
     """
     persona = load_persona(_AGENT_ID)  # noqa: F841  # available for future LLM-interpreted flows
     settings = get_settings()
@@ -109,10 +119,42 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
             ),
         }
 
-    if state.approval_granted is not True:
+    # Approval verdict resolution.
+    #
+    # If `approval_granted` is still unset (None), we pause here and let the
+    # /approval HTTPRoute resume us with the user's verdict. On resume,
+    # LangGraph re-executes the node from the top — every check above is
+    # idempotent (validation + load_persona/get_settings only), so re-running
+    # them is safe.
+    #
+    # If `approval_granted` is already True/False at node entry (set elsewhere
+    # — e.g. a pre-approved test path), skip the interrupt and fall through
+    # to the existing logic.
+    granted: bool
+    approval_token: str | None
+    if state.approval_granted is None:
+        verdict: dict[str, Any] = interrupt(req.model_dump())
+        # Resume payload shape (api/approval.py post_approval):
+        #   {granted: bool, deferred: bool, approval_token: str, actor: str}
+        if verdict.get("deferred"):
+            result = ExecutionResult(
+                outcome="deferred",
+                reason=(
+                    f"deferred by {verdict.get('actor', 'unknown')}; "
+                    "supervisor may re-route or escalate."
+                ),
+            )
+            return {"output": f"errand-runner: {result.reason}"}
+        granted = bool(verdict.get("granted", False))
+        approval_token = verdict.get("approval_token")
+    else:
+        granted = bool(state.approval_granted)
+        approval_token = state.approval_token
+
+    if not granted:
         result = ExecutionResult(
-            outcome="no-approval",
-            reason="approval_granted is not True; refusing.",
+            outcome="rejected",
+            reason="approval not granted; refusing.",
         )
         return {"output": f"errand-runner: {result.reason}"}
 
@@ -136,9 +178,11 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
         }
 
     # Signed-token verification — shared HMAC with n8n's approval-receive workflow.
+    # `approval_token` is sourced from the resume verdict if we paused here,
+    # otherwise from inbound state (back-compat with pre-approved test paths).
     signing_secret = settings.langgraph_approval_signing_key or ""
     if not _verify_approval_token(
-        state.approval_token or "",
+        approval_token or "",
         task_id=state.task_id,
         action_class=req.action_class,
         server=server,
