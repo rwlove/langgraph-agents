@@ -10,12 +10,15 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+import structlog
 from fastapi.testclient import TestClient
 from langchain_core.outputs import Generation, LLMResult
 
 from agents.observability import (
     CONTENT_TYPE_LATEST,
     LangGraphMetricsCallback,
+    configure_structlog,
+    get_logger,
     langgraph_calls_total,
     langgraph_cost_usd_total,
     langgraph_llm_duration_seconds,
@@ -144,6 +147,70 @@ def test_metrics_text_returns_prometheus_format() -> None:
     assert content_type == CONTENT_TYPE_LATEST
     assert b"langgraph_calls_total" in payload
     assert b"# TYPE langgraph_calls_total counter" in payload
+
+
+def test_get_logger_binds_component_only_not_agent() -> None:
+    """Regression: ``get_logger`` must not bind ``agent`` at construction time.
+
+    A logger-level ``agent`` binding would outrank the per-node
+    ``structlog.contextvars.bind_contextvars(agent=...)`` set by
+    ``graphs/fleet.py:_with_activity_log`` and silently mislabel every
+    structlog event a node emits through a shared helper (api surfaces,
+    graph wrapper, paused-threads sweeper). See v0.2.24 changelog.
+
+    Verifies the real processor pipeline (including
+    ``merge_contextvars``) — ``structlog.testing.capture_logs`` bypasses
+    processors, so we drive the full chain through a ``LogCapture``
+    processor and a structlog config that mirrors production.
+    """
+    cap = structlog.testing.LogCapture()
+    structlog.configure(
+        processors=[structlog.contextvars.merge_contextvars, cap],
+        wrapper_class=structlog.BoundLogger,
+        cache_logger_on_first_use=False,
+    )
+    try:
+        slog = get_logger("graphs.fleet")
+        structlog.contextvars.clear_contextvars()
+        token = structlog.contextvars.bind_contextvars(agent="triager")
+        try:
+            slog.info("node_start", task_id="lf-test")
+        finally:
+            structlog.contextvars.reset_contextvars(**token)
+            structlog.contextvars.clear_contextvars()
+    finally:
+        # Restore production structlog config for other tests.
+        configure_structlog()
+
+    assert len(cap.entries) == 1
+    event = cap.entries[0]
+    # The contextvar's `agent=triager` must win, not be shadowed by a
+    # logger-level binding.
+    assert event.get("agent") == "triager", event
+    # And the component label rides along on the same event.
+    assert event.get("component") == "graphs.fleet", event
+    assert event["event"] == "node_start"
+    assert event["task_id"] == "lf-test"
+
+
+def test_get_logger_default_component_is_agents() -> None:
+    """``get_logger()`` with no arg falls back to ``component=agents``
+    and does not bind any ``agent`` field."""
+    cap = structlog.testing.LogCapture()
+    structlog.configure(
+        processors=[structlog.contextvars.merge_contextvars, cap],
+        wrapper_class=structlog.BoundLogger,
+        cache_logger_on_first_use=False,
+    )
+    try:
+        slog = get_logger()
+        structlog.contextvars.clear_contextvars()
+        slog.info("ping")
+    finally:
+        configure_structlog()
+    assert cap.entries[0].get("component") == "agents"
+    # No agent label when neither caller nor contextvar provides one.
+    assert "agent" not in cap.entries[0]
 
 
 @pytest.fixture()
