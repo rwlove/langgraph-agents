@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from agents.observability import get_logger
 
 router = APIRouter(prefix="", tags=["approval"])
-slog = get_logger("approval")
+slog = get_logger("api.approval")
 
 Reaction = Literal["approve", "reject", "defer"]
 

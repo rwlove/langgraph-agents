@@ -15,8 +15,11 @@ This module exposes:
   above on each LLM run, given the agent/group/model context.
 - A ``record_llm_call(...)`` helper for non-LangChain emission paths
   (direct ``ollama.Client`` use, batch jobs, etc.).
-- A ``get_logger(agent_id)`` factory returning a `structlog` BoundLogger
-  pre-bound with ``agent`` and ``component`` fields.
+- A ``get_logger(component)`` factory returning a `structlog` BoundLogger
+  pre-bound with a ``component`` field naming the source-code area
+  (e.g. ``api.inbox``, ``graphs.fleet``). The ``agent`` field is
+  reserved for per-event binding via ``structlog.contextvars`` so the
+  triager / coder / reviewer label survives across node boundaries.
 
 The label set is the v20-locked schema and shared across phases 2/4/6.
 Phase 2's LLM factory will be the primary emitter; phase 6's Claude leg
@@ -132,14 +135,27 @@ def configure_structlog(level: str = "INFO") -> None:
     )
 
 
-def get_logger(agent_id: str | None = None) -> structlog.stdlib.BoundLogger:
-    """Return a structlog BoundLogger pre-bound with `component=agents` and
-    an optional `agent` field. Callers should `.bind(task_id=...)` per request.
+def get_logger(component: str | None = None) -> structlog.stdlib.BoundLogger:
+    """Return a structlog BoundLogger pre-bound with a ``component`` field.
+
+    ``component`` names the source-code area emitting the event
+    (e.g. ``api.inbox``, ``graphs.fleet``, ``paused_threads``). When
+    omitted, the logger is bound with ``component=agents`` for
+    backward-compatibility with the top-level package.
+
+    The ``agent`` field (triager / coder / reviewer / etc.) is
+    deliberately NOT bound here — it must be set via
+    ``structlog.contextvars.bind_contextvars(agent=...)`` from the node
+    actually executing, so events emitted from shared helpers
+    (graph wrappers, API surfaces, sweepers) inherit the correct
+    per-task agent label. Binding ``agent`` at logger-construction
+    time would override the contextvar (logger-level bindings outrank
+    contextvars in structlog's merge order), which would silently
+    mislabel every event a node emits through one of those shared
+    helpers — observed and fixed in v0.2.24.
     """
     log = structlog.get_logger("agents")
-    bindings: dict[str, Any] = {"component": "agents"}
-    if agent_id is not None:
-        bindings["agent"] = agent_id
+    bindings: dict[str, Any] = {"component": component or "agents"}
     return cast("structlog.stdlib.BoundLogger", log.bind(**bindings))
 
 

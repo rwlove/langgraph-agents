@@ -24,7 +24,7 @@ from agents.state import FleetState, Source
 from agents.tools.zulip import ZulipNotConfiguredError, send_dm
 
 logger = logging.getLogger("agents.api.inbox")
-slog = get_logger("inbox")
+slog = get_logger("api.inbox")
 
 router = APIRouter(prefix="", tags=["inbox"])
 
