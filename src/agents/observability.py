@@ -30,6 +30,7 @@ adds ``trigger=requires_cloud|degraded_mode|policy_allowlist`` to the
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -41,6 +42,13 @@ import structlog
 from langchain_core.callbacks import BaseCallbackHandler
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler as LangfuseLangchainCallback
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
@@ -188,17 +196,15 @@ def record_llm_call(
         agent=agent, group=group, model=model, outcome=outcome, trigger=trigger
     ).inc()
     if tokens_in:
-        langgraph_tokens_total.labels(
-            agent=agent, group=group, model=model, direction="in"
-        ).inc(tokens_in)
-    if tokens_out:
-        langgraph_tokens_total.labels(
-            agent=agent, group=group, model=model, direction="out"
-        ).inc(tokens_out)
-    if cost_usd:
-        langgraph_cost_usd_total.labels(agent=agent, group=group, model=model).inc(
-            cost_usd
+        langgraph_tokens_total.labels(agent=agent, group=group, model=model, direction="in").inc(
+            tokens_in
         )
+    if tokens_out:
+        langgraph_tokens_total.labels(agent=agent, group=group, model=model, direction="out").inc(
+            tokens_out
+        )
+    if cost_usd:
+        langgraph_cost_usd_total.labels(agent=agent, group=group, model=model).inc(cost_usd)
         # Per-task + per-agent-daily accumulators (P3.1 follow-up). The
         # task_id is read from structlog contextvars (bound by /inbox +
         # graphs/fleet at request entry); when it's absent — e.g. a
@@ -213,9 +219,9 @@ def record_llm_call(
             cost_usd=cost_usd,
         )
     if duration_seconds:
-        langgraph_llm_duration_seconds.labels(
-            agent=agent, group=group, model=model
-        ).observe(duration_seconds)
+        langgraph_llm_duration_seconds.labels(agent=agent, group=group, model=model).observe(
+            duration_seconds
+        )
 
 
 @contextmanager
@@ -318,12 +324,8 @@ def _evict_old_agent_daily() -> None:
     ``record_task_spend`` (the only writer) so eviction stays inline with
     the writes that grow the dict.
     """
-    cutoff = (datetime.now(UTC).date() - timedelta(days=_AGENT_DAILY_RETENTION_DAYS))
-    stale = [
-        key
-        for key in _agent_daily_spend
-        if date.fromisoformat(key[1]) < cutoff
-    ]
+    cutoff = datetime.now(UTC).date() - timedelta(days=_AGENT_DAILY_RETENTION_DAYS)
+    stale = [key for key in _agent_daily_spend if date.fromisoformat(key[1]) < cutoff]
     for key in stale:
         del _agent_daily_spend[key]
 
@@ -453,9 +455,7 @@ class LangGraphMetricsCallback(BaseCallbackHandler):
         tokens_in = 0
         tokens_out = 0
         if response.llm_output:
-            usage = response.llm_output.get("token_usage") or response.llm_output.get(
-                "usage"
-            ) or {}
+            usage = response.llm_output.get("token_usage") or response.llm_output.get("usage") or {}
             tokens_in = int(usage.get("prompt_tokens", 0) or 0)
             tokens_out = int(usage.get("completion_tokens", 0) or 0)
 
@@ -524,13 +524,9 @@ def init_langfuse() -> None:
     if _langfuse_client is not None:
         return
     if not (
-        settings.langfuse_host
-        and settings.langfuse_public_key
-        and settings.langfuse_secret_key
+        settings.langfuse_host and settings.langfuse_public_key and settings.langfuse_secret_key
     ):
-        _LANGFUSE_LOGGER.info(
-            "langfuse keys not configured; per-task tracing disabled"
-        )
+        _LANGFUSE_LOGGER.info("langfuse keys not configured; per-task tracing disabled")
         return
 
     _langfuse_client = Langfuse(
@@ -538,9 +534,7 @@ def init_langfuse() -> None:
         public_key=settings.langfuse_public_key,
         secret_key=settings.langfuse_secret_key,
     )
-    _LANGFUSE_LOGGER.info(
-        "langfuse client initialized (host=%s)", settings.langfuse_host
-    )
+    _LANGFUSE_LOGGER.info("langfuse client initialized (host=%s)", settings.langfuse_host)
 
 
 def langfuse_callback_handler() -> BaseCallbackHandler | None:
@@ -572,6 +566,103 @@ def flush_langfuse() -> None:
         _LANGFUSE_LOGGER.warning("langfuse flush failed: %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# OpenTelemetry tracing (Phase 3.K).
+#
+# Distributed trace pipeline: lga emits OTLP gRPC → in-cluster
+# opentelemetry-collector (deployed 2.J2) → Tempo (deployed 2.J1) →
+# Grafana datasource.
+#
+# Sibling-to-Langfuse: Langfuse owns the per-LLM-call trace surface
+# (run_id, prompt/response payloads, cost). OTel owns the per-request
+# distributed trace (the journey of a /inbox task through node calls +
+# MCP tool calls + outbound HTTP). They coexist; neither replaces the
+# other.
+#
+# Silent-disable: if OTLP collector unreachable, the OTel SDK queues
+# spans in-memory and drops on backpressure. /inbox never blocks on
+# trace export.
+# ---------------------------------------------------------------------------
+
+_OTEL_LOGGER = logging.getLogger("agents.observability.otel")
+_otel_initialized = False
+
+
+def init_otel() -> None:
+    """Initialize global OTel tracer provider + OTLP exporter.
+
+    Idempotent. Reads:
+    - `OTEL_EXPORTER_OTLP_ENDPOINT` (env, default
+      `http://opentelemetry-collector.observability.svc.cluster.local:4317`)
+    - `OTEL_SERVICE_NAME` (env, default `langgraph-agents`)
+    - `OTEL_ENABLED` (env, default `true`)
+
+    Side effects on first successful call:
+    - Sets the global TracerProvider.
+    - Attaches `OTLPSpanExporter` via `BatchSpanProcessor`.
+    - Auto-instruments `httpx` so outgoing MCP / Ollama / Claude / ntfy
+      calls propagate W3C `traceparent` headers automatically.
+    - The FastAPI app itself is instrumented in `agents.main` after the
+      `FastAPI` instance is constructed (see `instrument_fastapi_app`).
+    """
+    global _otel_initialized  # noqa: PLW0603
+    if _otel_initialized:
+        return
+
+    if os.getenv("OTEL_ENABLED", "true").lower() not in ("true", "1", "yes"):
+        _OTEL_LOGGER.info("OTEL_ENABLED=false; tracing disabled")
+        return
+
+    try:
+        endpoint = os.getenv(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://opentelemetry-collector.observability.svc.cluster.local:4317",
+        )
+        service_name = os.getenv("OTEL_SERVICE_NAME", "langgraph-agents")
+
+        resource = Resource.create(
+            {
+                "service.name": service_name,
+                "service.namespace": "ai",
+            }
+        )
+        provider = TracerProvider(resource=resource)
+        # `insecure=True` because the in-cluster collector accepts plain
+        # gRPC; Cilium handles transport-level isolation via CNP. If we
+        # ever expose a remote collector, switch to TLS here.
+        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+
+        HTTPXClientInstrumentor().instrument()
+
+        _otel_initialized = True
+        _OTEL_LOGGER.info(
+            "OTel tracer initialized: service=%s endpoint=%s",
+            service_name,
+            endpoint,
+        )
+    except Exception as exc:  # best-effort init
+        _OTEL_LOGGER.warning("OTel init failed (tracing disabled): %s", exc)
+
+
+def instrument_fastapi_app(app: Any) -> None:
+    """Auto-span every FastAPI request. Call from `agents.main` after
+    constructing the `FastAPI` instance.
+
+    Skipped silently if OTel init failed earlier (the global provider
+    is the NoOp default and instrumentation harmlessly produces no
+    spans).
+    """
+    if not _otel_initialized:
+        return
+    try:
+        FastAPIInstrumentor.instrument_app(app)
+        _OTEL_LOGGER.info("FastAPI instrumented for OTel spans")
+    except Exception as exc:
+        _OTEL_LOGGER.warning("FastAPI OTel instrumentation failed: %s", exc)
+
+
 __all__ = [
     "CONTENT_TYPE_LATEST",
     "LangGraphMetricsCallback",
@@ -581,6 +672,8 @@ __all__ = [
     "get_logger",
     "global_claude_spend_usd",
     "init_langfuse",
+    "init_otel",
+    "instrument_fastapi_app",
     "langfuse_callback_handler",
     "langgraph_calls_total",
     "langgraph_cost_usd_total",
