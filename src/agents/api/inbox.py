@@ -19,6 +19,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from agents.idempotency import DedupStore
 from agents.observability import get_logger
 from agents.state import (
     DataTier,
@@ -73,7 +74,7 @@ class InboxRequest(BaseModel):
 
 class InboxResponse(BaseModel):
     task_id: str
-    status: str  # "complete" | "paused" | "error"
+    status: str  # "complete" | "paused" | "error" | "duplicate"
     output: str | None = None
     paused_for: dict[str, Any] | None = None
 
@@ -91,6 +92,29 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     # task-trail viewer. Bindings live in the asyncio task's contextvars and
     # die with the task — no manual unbind needed in the FastAPI request path.
     structlog.contextvars.bind_contextvars(task_id=req.task_id, source=req.source, user=req.user)
+
+    # Phase 3.G — idempotency-key dedup. If the caller passed an
+    # `idempotency_key` and we've seen it within the TTL window, return
+    # the cached response (the prior task_id) instead of re-running the
+    # graph. Old callers don't pass the key → no dedup, no behavior
+    # change. DedupStore degrades gracefully on Dragonfly outage (logs
+    # warning, returns None → falls through to run the graph).
+    if req.idempotency_key is not None:
+        dedup_store: DedupStore = request.app.state.dedup_store
+        prior_task_id = await dedup_store.check_and_set(
+            key=req.idempotency_key,
+            value=req.task_id,
+        )
+        if prior_task_id is not None and prior_task_id != "":
+            slog.info(
+                "inbox_idempotency_hit",
+                idempotency_key=req.idempotency_key,
+                returned_task_id=prior_task_id,
+            )
+            return InboxResponse(
+                task_id=prior_task_id,
+                status="duplicate",
+            )
 
     initial_state = FleetState(
         task_id=req.task_id,
