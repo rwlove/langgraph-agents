@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://json.schemastore.org/pre-commit-config.json
+
+# Pre-commit hooks for langgraph-agents.
+#
+# Author-time defense matching CI's build + test workflows. Per
+# HOMELAB-SPEC Inv 6 ("The PR is the artifact of a passing local
+# run") and the home-ops `.agents/skills/pre-submit.md` checklist.
+#
+# Install: `pre-commit install`
+# Run on all files once: `pre-commit run --all-files`
+
+repos:
+  # File hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+
+  # Secret scan
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # Ruff — format + lint. Configured by [tool.ruff] in pyproject.toml.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.5
+    hooks:
+      - id: ruff-format
+      - id: ruff-check
+        args: [--fix]
+
+  # Mypy — type check. Configured by [tool.mypy] in pyproject.toml.
+  # Pinned to a recent stable; matches the dev-dep `mypy>=1.13.0`.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - pydantic>=2.9.0
+          - types-pyyaml
+        # Type-checking pre-commit only the staged files keeps the
+        # hook fast; CI does the full check.
+        args: [--no-strict-optional]
+        files: ^src/
