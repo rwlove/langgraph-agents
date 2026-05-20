@@ -33,6 +33,7 @@ import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
@@ -198,6 +199,19 @@ def record_llm_call(
         langgraph_cost_usd_total.labels(agent=agent, group=group, model=model).inc(
             cost_usd
         )
+        # Per-task + per-agent-daily accumulators (P3.1 follow-up). The
+        # task_id is read from structlog contextvars (bound by /inbox +
+        # graphs/fleet at request entry); when it's absent — e.g. a
+        # scheduled-job path that never bound one — the per-task spend
+        # is silently skipped. Per-agent-daily always updates because
+        # `agent` is a known argument here. See the eviction note on
+        # ``_evict_old_agent_daily``.
+        task_id = structlog.contextvars.get_contextvars().get("task_id")
+        record_task_spend(
+            task_id=task_id if isinstance(task_id, str) else None,
+            agent=agent,
+            cost_usd=cost_usd,
+        )
     if duration_seconds:
         langgraph_llm_duration_seconds.labels(
             agent=agent, group=group, model=model
@@ -253,6 +267,118 @@ def global_claude_spend_usd() -> float:
             if sample.name.endswith("_total") and sample.labels.get("group") == "claude":
                 total += sample.value
     return total
+
+
+# ---------------------------------------------------------------------------
+# Per-task + per-agent-daily cost accumulators (P3.1 follow-up).
+#
+# Process-local dicts updated from ``record_llm_call`` whenever a
+# non-zero cost is stamped. Same caveats as the global-daily cap
+# (process-local; resets on pod restart; no cross-replica view —
+# Recreate strategy + single replica makes that acceptable). Keys:
+#
+# - ``_task_spend[task_id]`` → float USD across that task's lifetime
+#   (the lifetime is "while the process is up"; restart wipes it,
+#   which is also when a paused thread would be resumed via the
+#   /admin/paused-threads sweep, so resuming threads start at zero).
+# - ``_agent_daily_spend[(agent, "YYYY-MM-DD" UTC)]`` → float USD
+#   for that agent on that UTC day.
+#
+# Per-task is keyed by task_id (a string from the request entry's
+# structlog contextvar bind). When the contextvar isn't bound — e.g.
+# scheduled-job paths that never call ``structlog.contextvars.bind_
+# contextvars(task_id=...)`` — ``record_task_spend`` skips the per-
+# task update silently. The per-agent-daily update is always applied
+# because ``agent`` is a required argument.
+# ---------------------------------------------------------------------------
+
+_task_spend: dict[str, float] = {}
+_agent_daily_spend: dict[tuple[str, str], float] = {}
+
+# Drop ``_agent_daily_spend`` entries older than this many days at the
+# start of each ``record_task_spend`` call. Without eviction the dict
+# would grow by ``len(AGENT_GROUP)`` entries per UTC day forever (small
+# in absolute terms — ~17 agents x N days — but unbounded is unbounded).
+# 7 days is generous enough that operator queries via getters can
+# meaningfully ask about earlier UTC days within a week-long debugging
+# window; older than that, the answer is "spend was 0 (evicted)".
+_AGENT_DAILY_RETENTION_DAYS = 7
+
+
+def _today_utc_key() -> str:
+    """Return today's UTC date as ``YYYY-MM-DD`` (the per-agent-daily key)."""
+    return datetime.now(UTC).date().isoformat()
+
+
+def _evict_old_agent_daily() -> None:
+    """Drop ``_agent_daily_spend`` entries older than the retention window.
+
+    O(n) over the dict size; n is bounded by ``len(agents) x retention_days``
+    in steady state, so the scan cost is trivial. Called from
+    ``record_task_spend`` (the only writer) so eviction stays inline with
+    the writes that grow the dict.
+    """
+    cutoff = (datetime.now(UTC).date() - timedelta(days=_AGENT_DAILY_RETENTION_DAYS))
+    stale = [
+        key
+        for key in _agent_daily_spend
+        if date.fromisoformat(key[1]) < cutoff
+    ]
+    for key in stale:
+        del _agent_daily_spend[key]
+
+
+def record_task_spend(
+    *,
+    task_id: str | None,
+    agent: str,
+    cost_usd: float,
+) -> None:
+    """Update both per-task and per-agent-daily accumulators.
+
+    Called from ``record_llm_call`` whenever ``cost_usd > 0``. When
+    ``task_id`` is ``None`` (no contextvar bound at emission time),
+    the per-task accumulator is skipped silently — the global +
+    per-agent-daily caps still apply, which is the documented graceful
+    degradation for scheduled-job paths.
+
+    Always evicts stale per-agent-daily entries before writing — keeps
+    the dict bounded without a background reaper.
+    """
+    if cost_usd <= 0:
+        return
+    _evict_old_agent_daily()
+    if task_id is not None:
+        _task_spend[task_id] = _task_spend.get(task_id, 0.0) + cost_usd
+    agent_key = (agent, _today_utc_key())
+    _agent_daily_spend[agent_key] = _agent_daily_spend.get(agent_key, 0.0) + cost_usd
+
+
+def task_spend_usd(task_id: str | None) -> float:
+    """Return cumulative spend for ``task_id``, or 0.0 if untracked/unknown.
+
+    ``None`` returns 0.0 — used by the cap check in ``llm._build_claude``
+    when no ``task_id`` contextvar is bound, which skips the per-task cap.
+    """
+    if task_id is None:
+        return 0.0
+    return _task_spend.get(task_id, 0.0)
+
+
+def agent_daily_spend_usd(agent: str) -> float:
+    """Return ``agent``'s cumulative spend for the current UTC day."""
+    return _agent_daily_spend.get((agent, _today_utc_key()), 0.0)
+
+
+def _reset_cost_accumulators() -> None:
+    """Test-only: zero out the per-task + per-agent-daily dicts.
+
+    Not part of the public API — invoked by the test fixture in
+    ``tests/test_cost_cap.py`` to keep tests independent. Production
+    code should not call this.
+    """
+    _task_spend.clear()
+    _agent_daily_spend.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +575,7 @@ def flush_langfuse() -> None:
 __all__ = [
     "CONTENT_TYPE_LATEST",
     "LangGraphMetricsCallback",
+    "agent_daily_spend_usd",
     "configure_structlog",
     "flush_langfuse",
     "get_logger",
@@ -463,4 +590,6 @@ __all__ = [
     "llm_timer",
     "metrics_text",
     "record_llm_call",
+    "record_task_spend",
+    "task_spend_usd",
 ]
