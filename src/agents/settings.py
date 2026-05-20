@@ -173,19 +173,25 @@ class Settings(BaseSettings):
     )
 
     # --- cost caps (per security review cat 7) ---
-    # Global daily cap is enforced in `agents.llm._build_claude` against the
-    # in-process `langgraph_cost_usd_total{group="claude"}` Counter sum —
-    # see `agents.observability.global_claude_spend_usd` for the caveats
-    # (process-local; resets on pod restart; no true 24h window).
+    # All three caps are enforced in `agents.llm._build_claude` BEFORE
+    # constructing the ChatAnthropic client. Sources of truth:
     #
-    # The per-task and per-agent caps below are DEFERRED — both require
-    # plumbing `FleetState.accumulated_cost_usd` (and a per-agent
-    # accumulator) through every node in the graph so the factory can
-    # see the per-call context at `_build_claude` time. That's a state-
-    # schema change touching every node, not a one-file diff, so it's
-    # tracked as a follow-up audit item. Settings are kept as load-able
-    # configuration so the values can be tuned ahead of the enforcement
-    # PR without another env-var rollout.
+    # - global_daily: `langgraph_cost_usd_total{group="claude"}` Counter
+    #   sum via `agents.observability.global_claude_spend_usd`.
+    # - per_agent_daily: in-process `_agent_daily_spend[(agent, today UTC)]`
+    #   via `agents.observability.agent_daily_spend_usd`. Keyed by
+    #   YYYY-MM-DD UTC; rolls over at UTC midnight; evicts entries older
+    #   than 7 days on each write.
+    # - per_task: in-process `_task_spend[task_id]` via
+    #   `agents.observability.task_spend_usd`. task_id is read from
+    #   structlog contextvars (bound by /inbox + graphs/fleet at entry);
+    #   SKIPPED silently when no task_id is bound at the call site
+    #   (e.g. scheduled-job paths). The global + per-agent caps still
+    #   apply, which is the documented graceful degradation.
+    #
+    # Same process-local caveats as global_daily: all three accumulators
+    # reset on pod restart; cross-replica view is not aggregated (single-
+    # replica `Recreate` deployment makes that acceptable).
     cost_cap_per_task_usd: float = 5.0
     cost_cap_per_agent_daily_usd: float = 10.0
     cost_cap_global_daily_usd: float = 30.0
