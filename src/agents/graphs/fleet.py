@@ -7,18 +7,22 @@ routing target must resolve to a registered node.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Hashable
 from typing import Any, cast
 
+import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.store.base import BaseStore
 
 from agents.nodes import NODES
+from agents.observability import get_logger
 from agents.state import ALL_AGENT_IDS, ActionClass, AgentId, FleetState
 from agents.tools.activity_log import log_activity
 
 logger = logging.getLogger("agents.graphs.fleet")
+slog = get_logger("graphs.fleet")
 
 
 # Per-agent action class default. errand-runner can produce C/D depending on
@@ -60,18 +64,46 @@ def _with_activity_log(
     under strict mypy. The runtime accepts any callable.
     """
     def wrapper(state: FleetState) -> dict[str, Any]:
-        result = fn(state)
+        # Bind `agent` on structlog contextvars so any structlog event the
+        # node emits carries the agent label. The outer /inbox or /approval
+        # handler bound task_id; the {agent, task_id, event} triple is what
+        # the Loki dashboard trail viewer joins on. Token-based unbind on the
+        # way out is essential — LangGraph runs nodes serially in the same
+        # asyncio task, so without it the next node inherits the previous
+        # node's `agent` label.
+        token = structlog.contextvars.bind_contextvars(agent=agent_id)
+        slog.info("node_start")
+        t0 = time.perf_counter()
         try:
-            output = str(result.get("output", "") or "")[:200]
+            result = fn(state)
+        except Exception as exc:
+            slog.warning(
+                "node_error",
+                error_type=type(exc).__name__,
+                duration_s=time.perf_counter() - t0,
+            )
+            structlog.contextvars.reset_contextvars(**token)
+            raise
+        duration_s = time.perf_counter() - t0
+        output = str(result.get("output", "") or "")[:200]
+        outcome = "success" if "CANCELLED" not in output else "error"
+        slog.info(
+            "node_end",
+            outcome=outcome,
+            output_preview=output[:80],
+            duration_s=duration_s,
+        )
+        try:
             log_activity(
                 agent_id,
                 state.task_id,
                 action_class=_DEFAULT_ACTION_CLASS.get(agent_id, "A"),
                 summary=output or "(no output)",
-                outcome="success" if "CANCELLED" not in output else "error",
+                outcome=outcome,
             )
         except Exception as exc:
             logger.warning("activity log write failed for %s: %s", agent_id, exc)
+        structlog.contextvars.reset_contextvars(**token)
         return result
     wrapper.__name__ = fn.__name__
     return cast(Any, wrapper)
