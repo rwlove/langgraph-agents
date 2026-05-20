@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from agents.idempotency import DedupStore
 from agents.observability import get_logger
+from agents.settings import get_settings
 from agents.state import (
     DataTier,
     FleetState,
@@ -92,6 +93,37 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     # task-trail viewer. Bindings live in the asyncio task's contextvars and
     # die with the task — no manual unbind needed in the FastAPI request path.
     structlog.contextvars.bind_contextvars(task_id=req.task_id, source=req.source, user=req.user)
+
+    # Phase 3.I — Renee allowlist (HOMELAB-SPEC Layer 7).
+    # When `requester="renee"`, the envelope's `intent` must be in the
+    # operator-configured allowlist. Other requesters (rob, system,
+    # None) skip the check. Default scope is the "medium" decision
+    # from 2026-05-20 (action + question).
+    if req.requester == "renee":
+        settings = get_settings()
+        if req.intent is None:
+            slog.warning(
+                "inbox_renee_intent_missing",
+                idempotency_key=req.idempotency_key,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="requester=renee requires `intent` field on the envelope",
+            )
+        if req.intent not in settings.renee_allowed_intents:
+            slog.warning(
+                "inbox_renee_intent_blocked",
+                intent=req.intent,
+                allowed=sorted(settings.renee_allowed_intents),
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"intent={req.intent!r} is not in Renee's allowlist; "
+                    "this request would route to Rob's approval queue if the "
+                    "substrate were available — for now it's rejected."
+                ),
+            )
 
     # Phase 3.G — idempotency-key dedup. If the caller passed an
     # `idempotency_key` and we've seen it within the TTL window, return

@@ -218,6 +218,26 @@ class Settings(BaseSettings):
     # within an hour; small Dragonfly memory footprint.
     idempotency_ttl_seconds: int = Field(default=3600, ge=1)
 
+    # --- Renee allowlist (Phase 3.I; HOMELAB-SPEC Layer 7) ---
+    # When `/inbox` receives a request with `requester="renee"`, the
+    # envelope's `intent` MUST be in this set. Other requesters
+    # (`rob`, `system`, None) skip the check.
+    #
+    # Default scope is "medium" per the 2026-05-20 rollout decision:
+    # broad envelope-level intents that the triager can downstream-
+    # gate at the domain level (smart-home actions auto-execute;
+    # everything else routes through the existing approval flow).
+    #
+    # Tighten or widen via env: `RENEE_ALLOWED_INTENTS="action,question"`
+    # The granular domain-level allowlist (media-playback, lighting,
+    # climate, scenes, locks-unlock-when-already-home) is forward-
+    # looking — depends on the task-queue substrate (see
+    # docs/src/orchestration_substrate.md).
+    renee_allowed_intents: set[str] = Field(
+        default={"action", "question"},
+        description="Envelope `intent` values that Renee may submit.",
+    )
+
     # --- runtime ---
     log_level: str = "INFO"
     user_timezone: str = "America/New_York"
