@@ -119,8 +119,19 @@ class Settings(BaseSettings):
     memory_embed_model: str = Field(
         default="nomic-embed-text",
         description=(
-            "Embedding model for MCPMemoryStore. Must produce 768-dim vectors "
-            "to match the kg.observations.embedding column."
+            "Embedding model for MCPMemoryStore. Must match the dim of "
+            "kg.observations.embedding (1024 for bge-m3 post-Phase-A; 768 "
+            "for nomic-embed-text pre-cutover)."
+        ),
+    )
+    memory_ollama_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional Ollama endpoint for MCPMemoryStore embeddings. When "
+            "None, falls back to ollama_p40_url. Set this to point at "
+            "ollama-spark to avoid the P40 model-swap churn that the "
+            "default path causes (bge-m3 + qwen2.5:7b alternating loads "
+            "out of the P40's MAX_LOADED=1 slot)."
         ),
     )
 

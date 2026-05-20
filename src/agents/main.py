@@ -168,7 +168,11 @@ async def _build_store(
         stack.push_async_callback(pool.close)
         return MCPMemoryStore(
             pool=pool,
-            ollama_base_url=settings.ollama_p40_url,
+            # Use the dedicated memory Ollama URL if set, else fall back
+            # to the P40 endpoint. Pointing at ollama-spark avoids the
+            # P40 model-swap churn (bge-m3 + qwen2.5:7b can't both live
+            # in P40's MAX_LOADED=1 slot).
+            ollama_base_url=settings.memory_ollama_url or settings.ollama_p40_url,
             embed_model=settings.memory_embed_model,
         )
 
