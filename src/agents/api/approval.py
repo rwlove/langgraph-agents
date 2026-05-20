@@ -1,8 +1,9 @@
-"""POST /approval — n8n's approval-broker resumes a paused workflow.
+"""POST /approval — resume a paused workflow on a user verdict.
 
-When the user reacts (👍 / 👎 / ⏸️) in Zulip, n8n verifies the reaction is
-on the correct message + signed-token matches, then calls this endpoint with
-the resolution. We resume the LangGraph workflow with that resolution.
+Approval verdicts arrive from the ntfy action buttons on the user's phone
+(tap-to-approve, signed with an HMAC token). The button POSTs here over
+cloudflared, the token is verified by errand-runner downstream, and the
+LangGraph workflow resumes via ``Command(resume=...)``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ Reaction = Literal["approve", "reject", "defer"]
 class ApprovalRequest(BaseModel):
     task_id: str
     reaction: Reaction
-    approval_token: str  # n8n-signed HMAC; verified by errand-runner downstream
+    approval_token: str  # HMAC-signed; verified by errand-runner downstream
     actor: str = "rob"
 
 
@@ -39,8 +40,11 @@ async def post_approval(req: ApprovalRequest, request: Request) -> ApprovalRespo
 
     config = {"configurable": {"thread_id": req.task_id}}
 
-    # Verify the workflow is actually paused at an interrupt
-    snapshot = graph.get_state(config)
+    # Verify the workflow is actually paused at an interrupt. MUST use
+    # `aget_state` (async) — the checkpointer is `AsyncPostgresSaver`, and
+    # sync `get_state` from the main async event loop raises
+    # `asyncio.InvalidStateError`. Same constraint applies in `api/inbox.py`.
+    snapshot = await graph.aget_state(config)
     if not snapshot.tasks or not snapshot.tasks[0].interrupts:
         raise HTTPException(
             status_code=409,

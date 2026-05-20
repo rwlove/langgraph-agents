@@ -8,7 +8,8 @@ JSON-parse time, not at runtime.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal, cast, get_args
+from operator import add
+from typing import Annotated, Literal, cast, get_args
 
 from pydantic import BaseModel, Field
 
@@ -161,7 +162,13 @@ class FleetState(BaseModel):
 
     # --- output ---
     output: str | None = None
-    activity_log_entries: list[ActivityLogEntry] = Field(default_factory=list)
+    # Append-only across all nodes in one task run. Without the `add` reducer,
+    # LangGraph treats list fields as replace, so a triager → specialist →
+    # supervisor cascade would silently lose earlier audit entries when the
+    # supervisor node returns an updated log.
+    activity_log_entries: Annotated[list[ActivityLogEntry], add] = Field(
+        default_factory=list
+    )
 
     # --- meta ---
     started_at: datetime = Field(default_factory=_now_utc)

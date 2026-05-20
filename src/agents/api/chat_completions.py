@@ -3,12 +3,19 @@
 OpenWebUI registers an external OpenAI-compatible endpoint and lists its
 models in the model picker. Each registered agent ID is exposed here as
 a model:
-  - GET /v1/models → list of {id, object, owned_by} for the 15 agents
+  - GET /v1/models → list of {id, object, owned_by} for the fleet
   - POST /v1/chat/completions → single-agent chat (no fleet orchestration)
 
 This surface deliberately bypasses the triager + approval flow — it's for
-ad-hoc direct chat with one specialist. The full orchestration path is
+ad-hoc direct chat with one agent. The full orchestration path is
 POST /inbox.
+
+The bypass is documented and accepted. To keep the audit trail and the
+Prom metrics complete across all entry surfaces, this module attaches the
+``LangGraphMetricsCallback`` as an intrinsic ``ChatOllama`` callback (not
+via ``with_config(callbacks=[...])`` — see ``observability.py`` for the
+documented LangChain footgun) and writes a Class-A entry to the calling
+agent's vault activity log on each invocation.
 
 Streaming via SSE (Server-Sent Events) is supported. OpenWebUI uses it
 to show partial output as the LLM generates.
@@ -17,7 +24,9 @@ to show partial output as the LLM generates.
 from __future__ import annotations
 
 import json
+import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
@@ -27,9 +36,13 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 
+from agents.observability import LangGraphMetricsCallback
 from agents.personas import load_persona
 from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS, AgentId
+from agents.tools.activity_log import log_activity
+
+logger = logging.getLogger("agents.api.chat_completions")
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 
@@ -112,11 +125,26 @@ def _to_lc_messages(messages: list[ChatMessage], persona: str) -> list[Any]:
 
 
 def _make_llm(agent_id: AgentId, temperature: float | None) -> ChatOllama:
+    """Construct a ChatOllama with the per-agent model + metrics callback.
+
+    The metrics callback is wired as an *intrinsic* model callback (not via
+    ``with_config(callbacks=[...])``) — see the docstring on
+    ``LangGraphMetricsCallback`` for why that path is the only reliable one
+    once chains and structured-output wrappers come into play.
+    """
     settings = get_settings()
+    model_name = _PER_AGENT_MODEL.get(agent_id, "qwen2.5:7b")
+    handler = LangGraphMetricsCallback(
+        agent=agent_id,
+        group="local",
+        model=model_name,
+        trigger="openwebui",
+    )
     return ChatOllama(
-        model=_PER_AGENT_MODEL.get(agent_id, "qwen2.5:7b"),
+        model=model_name,
         base_url=settings.ollama_base_url.removesuffix("/v1"),
         temperature=0.2 if temperature is None else temperature,
+        callbacks=[handler],
     )
 
 
@@ -185,14 +213,46 @@ async def chat_completions(
     llm = _make_llm(agent_id, req.temperature)
     lc_messages = _to_lc_messages(req.messages, persona)
 
+    # OpenWebUI doesn't carry a task_id; mint one so the activity log + Prom
+    # labels can stitch this back together if anyone audits the trail.
+    task_id = f"openwebui-{uuid.uuid4().hex[:12]}"
+    last_user = next(
+        (m.content for m in reversed(req.messages) if m.role == "user"),
+        "",
+    )
+    summary = (last_user or "(no user prompt)")[:200]
+
+    def _audit(outcome: str) -> None:
+        # Best-effort: a vault write failure (PVC unmounted, perms) must not
+        # break the user-facing chat. Mirrors the pattern in fleet.py.
+        try:
+            log_activity(
+                agent_id,
+                task_id,
+                action_class="A",
+                summary=f"[openwebui] {summary}",
+                outcome=outcome,
+            )
+        except Exception as exc:
+            logger.warning("openwebui activity log write failed: %s", exc)
+
     if req.stream:
+        # Audit the stream as success on start — we can't easily distinguish
+        # mid-stream errors without a wrapping generator. The metrics
+        # callback's on_llm_error fires either way for the Prom side.
+        _audit("success")
         return StreamingResponse(
             _stream_response(req.model, llm, lc_messages),
             media_type="text/event-stream",
         )
 
     # Non-streaming path
-    result = await llm.ainvoke(lc_messages)
+    try:
+        result = await llm.ainvoke(lc_messages)
+    except Exception:
+        _audit("error")
+        raise
+    _audit("success")
     text = getattr(result, "content", "") or ""
     return {
         "id": f"chatcmpl-{int(time.time() * 1000)}",
