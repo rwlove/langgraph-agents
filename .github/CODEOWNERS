@@ -1,0 +1,40 @@
+# CODEOWNERS — langgraph-agents
+#
+# Solo-owner per HOMELAB-SPEC review-protection intent. Pins @rwlove
+# on the agent-framework critical paths: schema, ingress, model
+# routing, settings, and CI definitions. Branch-protection
+# enforcement (require-reviews) is configured in GitHub repo
+# settings; this file documents the intent + supplies the reviewer
+# hint to PR tooling.
+
+* @rwlove
+
+# Schema — the task envelope + state contract. Changes here ripple
+# through every downstream node + every consumer.
+/src/agents/state.py                        @rwlove
+
+# Ingress + admin surfaces — what the outside world POSTs to.
+/src/agents/api/                            @rwlove
+
+# Model routing factory — per-agent LLM selection, escalation,
+# cost-cap. Per `.agents/instructions/hardware-routing.md`.
+/src/agents/llm.py                          @rwlove
+
+# Settings — env-driven config; secret-shaped fields live here.
+/src/agents/settings.py                     @rwlove
+
+# Observability surface — Prom metrics + structlog + Langfuse.
+/src/agents/observability.py                @rwlove
+
+# Agent guidance.
+/.agents/                                   @rwlove
+/CLAUDE.md                                  @rwlove
+
+# Build + CI.
+/pyproject.toml                             @rwlove
+/uv.lock                                    @rwlove
+/.github/workflows/                         @rwlove
+/.github/CODEOWNERS                         @rwlove
+
+# Deployment manifest within this repo (if present).
+/deploy/                                    @rwlove
