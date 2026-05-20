@@ -51,6 +51,16 @@ dependencies = [
     # enforcement (Phase 3.G). redis-py async-compatible client speaks
     # the Redis protocol; Dragonfly emulates it at sub-ms latency.
     "redis>=5.0.0",
+
+    # OpenTelemetry — Phase 3.K trace propagation. SDK + OTLP gRPC
+    # exporter pointed at the in-cluster collector deployed in 2.J2.
+    # FastAPI instrumentation auto-spans /inbox requests; httpx
+    # instrumentation propagates W3C traceparent on outgoing tool/MCP
+    # calls. Langfuse keeps its per-LLM trace surface in parallel.
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27.0",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-instrumentation-httpx>=0.48b0",
 ]
 
 [dependency-groups]

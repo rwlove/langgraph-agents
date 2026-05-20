@@ -17,6 +17,7 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request
+from opentelemetry import trace
 from pydantic import BaseModel
 
 from agents.idempotency import DedupStore
@@ -33,6 +34,44 @@ from agents.state import (
     Source,
 )
 from agents.tools.zulip import ZulipNotConfiguredError, send_dm
+
+
+def _annotate_current_span(req: InboxRequest) -> None:
+    """Phase 3.K — set envelope fields as attributes on the active OTel span.
+
+    No-op when OTel is disabled (`opentelemetry.trace.get_current_span`
+    returns a NonRecordingSpan whose `set_attribute` is a noop). Catches
+    any exception defensively — observability annotation must never
+    break /inbox.
+    """
+    try:
+        span = trace.get_current_span()
+        span.set_attribute("app.task_id", req.task_id)
+        span.set_attribute("app.source", req.source)
+        span.set_attribute("app.user", req.user)
+        span.set_attribute("app.data_tier", req.data_tier)
+        span.set_attribute("app.priority", req.priority)
+        if req.origin is not None:
+            span.set_attribute("app.origin", req.origin)
+        if req.requester is not None:
+            span.set_attribute("app.requester", req.requester)
+        if req.intent is not None:
+            span.set_attribute("app.intent", req.intent)
+        if req.destructive is not None:
+            span.set_attribute("app.destructive", req.destructive)
+        if req.idempotency_key is not None:
+            span.set_attribute("app.idempotency_key", req.idempotency_key)
+        if req.trace_id is not None:
+            # The envelope `trace_id` is a hint from the caller. The OTel
+            # trace_id is the runtime one (extracted from W3C
+            # `traceparent` header if present). Recording the envelope
+            # hint as an attribute lets ops correlate at search time
+            # without losing the runtime trace_id.
+            span.set_attribute("app.envelope_trace_id", req.trace_id)
+    except Exception:
+        # Never let span annotation break /inbox.
+        logger.exception("OTel span annotation failed")
+
 
 logger = logging.getLogger("agents.api.inbox")
 slog = get_logger("api.inbox")
@@ -92,7 +131,19 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     # Loki the {agent, task_id, event} triple needed to render the dashboard
     # task-trail viewer. Bindings live in the asyncio task's contextvars and
     # die with the task — no manual unbind needed in the FastAPI request path.
-    structlog.contextvars.bind_contextvars(task_id=req.task_id, source=req.source, user=req.user)
+    structlog.contextvars.bind_contextvars(
+        task_id=req.task_id,
+        source=req.source,
+        user=req.user,
+        # Phase 3.H — data_tier on the asyncio task's contextvars so
+        # downstream LLM calls (agents.llm._build_claude) can read it
+        # without threading the value through every function signature.
+        data_tier=req.data_tier,
+    )
+
+    # Phase 3.K — annotate the FastAPI-instrumented span with envelope
+    # fields. No-op when OTel is disabled / collector unreachable.
+    _annotate_current_span(req)
 
     # Phase 3.I — Renee allowlist (HOMELAB-SPEC Layer 7).
     # When `requester="renee"`, the envelope's `intent` must be in the

@@ -31,6 +31,8 @@ from agents.observability import (
     configure_structlog,
     flush_langfuse,
     init_langfuse,
+    init_otel,
+    instrument_fastapi_app,
     metrics_text,
 )
 from agents.paused_threads import startup_log_paused_threads
@@ -211,6 +213,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # langgraph-agents secret already carries placeholders that the
     # operator fills in once a project is created in the langfuse UI.
     init_langfuse()
+    # Phase 3.K — OTel tracer + httpx auto-instrumentation. Silent
+    # disable if collector unreachable. FastAPI app instrumentation
+    # lives at module scope below so the wrapping happens before the
+    # first request.
+    init_otel()
     logger.info("starting langgraph-agents, vault_root=%s", settings.vault_root)
 
     async with AsyncExitStack() as stack:
@@ -269,6 +276,12 @@ app = FastAPI(
     description="Multi-agent fleet runtime — LangGraph + ollama + Claude API",
     lifespan=lifespan,
 )
+
+# Phase 3.K — FastAPI request auto-instrumentation. No-op when OTel
+# init failed in lifespan (provider is the NoOp default). Applied here
+# rather than inside `lifespan` so it wraps the routes before any
+# request lands.
+instrument_fastapi_app(app)
 
 app.include_router(health.router)
 app.include_router(inbox.router)
