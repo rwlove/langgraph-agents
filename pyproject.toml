@@ -46,6 +46,11 @@ dependencies = [
     "langfuse>=2.55.0",
     "langchain>=1.3.0",
     "prometheus-client>=0.21.0",
+
+    # Dragonfly-backed dedup store for /inbox idempotency_key
+    # enforcement (Phase 3.G). redis-py async-compatible client speaks
+    # the Redis protocol; Dragonfly emulates it at sub-ms latency.
+    "redis>=5.0.0",
 ]
 
 [dependency-groups]

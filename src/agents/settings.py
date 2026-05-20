@@ -80,8 +80,7 @@ class Settings(BaseSettings):
     claude_model: str = Field(
         default="claude-opus-4-7",
         description=(
-            "Claude model for escalation paths. Override via env. Used by "
-            "agents.llm._build_claude."
+            "Claude model for escalation paths. Override via env. Used by agents.llm._build_claude."
         ),
     )
     triager_model: str = Field(
@@ -207,6 +206,17 @@ class Settings(BaseSettings):
     # the startup diagnostic. The on-demand `/admin/paused-threads`
     # endpoint runs the sweep regardless.
     startup_sweep_enabled: bool = Field(default=False)
+
+    # --- idempotency dedup store (Phase 3.G) ---
+    # Dragonfly URL the DedupStore connects to; redis:// scheme.
+    # Default points at the in-cluster Dragonfly Service.
+    dragonfly_url: str = Field(
+        default="redis://dragonfly.databases.svc.cluster.local:6379/0",
+        description="Redis-protocol URL for the idempotency dedup store.",
+    )
+    # 1 hour. Decided 2026-05-20 — catches accidental double-submits
+    # within an hour; small Dragonfly memory footprint.
+    idempotency_ttl_seconds: int = Field(default=3600, ge=1)
 
     # --- runtime ---
     log_level: str = "INFO"

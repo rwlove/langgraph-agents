@@ -25,6 +25,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from agents.api import admin, approval, chat_completions, health, inbox
 from agents.graphs.fleet import build_fleet_graph
+from agents.idempotency import DedupStore
 from agents.memory_store import MCPMemoryStore, build_pool
 from agents.observability import (
     configure_structlog,
@@ -156,9 +157,7 @@ async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]
     return await _try_postgres()
 
 
-async def _build_store(
-    stack: AsyncExitStack, settings: Settings
-) -> MCPMemoryStore | None:
+async def _build_store(stack: AsyncExitStack, settings: Settings) -> MCPMemoryStore | None:
     """Build the long-term cross-agent KG store, or None to disable.
 
     Disabled (returns None) when `memory_backend=none` or when the
@@ -189,15 +188,11 @@ async def _build_store(
             logger.info("MCPMemoryStore connected (dev/localhost)")
             return store
         except Exception as exc:
-            logger.warning(
-                "MCPMemoryStore unavailable (%s); long-term store disabled", exc
-            )
+            logger.warning("MCPMemoryStore unavailable (%s); long-term store disabled", exc)
             return None
 
     store = await _try_open()
-    logger.info(
-        "MCPMemoryStore connected (kg.*) — shared with memory-mcp Phase 0"
-    )
+    logger.info("MCPMemoryStore connected (kg.*) — shared with memory-mcp Phase 0")
     return store
 
 
@@ -221,9 +216,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with AsyncExitStack() as stack:
         checkpointer = await _build_checkpointer(stack)
         store = await _build_store(stack, settings)
-        app.state.graph = build_fleet_graph(
-            checkpointer=checkpointer, store=store
+        app.state.graph = build_fleet_graph(checkpointer=checkpointer, store=store)
+        # Phase 3.G: idempotency dedup store backed by Dragonfly.
+        # Constructed lazily — first connect happens on first /inbox
+        # request that carries an `idempotency_key`. Closed on shutdown
+        # via the exit-stack callback.
+        app.state.dedup_store = DedupStore(
+            url=settings.dragonfly_url,
+            default_ttl_seconds=settings.idempotency_ttl_seconds,
         )
+        stack.push_async_callback(app.state.dedup_store.close)
         logger.info(
             "fleet graph compiled; entrypoint=triager; store=%s",
             "MCPMemoryStore" if store is not None else "disabled",
@@ -247,14 +249,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # regardless of this flag.
         sweep_task: asyncio.Task[None] | None = None
         if settings.startup_sweep_enabled:
-            sweep_task = asyncio.create_task(
-                startup_log_paused_threads(app.state.graph)
-            )
+            sweep_task = asyncio.create_task(startup_log_paused_threads(app.state.graph))
             app.state.startup_sweep_task = sweep_task
         else:
             logger.info(
-                "startup paused-threads sweep disabled "
-                "(set STARTUP_SWEEP_ENABLED=true to enable)"
+                "startup paused-threads sweep disabled (set STARTUP_SWEEP_ENABLED=true to enable)"
             )
 
         yield
