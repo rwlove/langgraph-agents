@@ -76,6 +76,27 @@ Source = Literal["voice", "zulip", "text", "holmesgpt", "test", "openwebui"]
 
 TimeoutTier = Literal["30min", "4h", "7d"]
 
+# --- Task envelope enums (HOMELAB-SPEC Layer 5) -----------------------------
+#
+# `Origin` is the spec's `origin` field, distinct from the existing `Source`.
+# Old callers send `source`; new callers may additionally send `origin`. The
+# two will be unified when the substrate lands (Phase 4); until then both
+# coexist and `origin` is optional.
+Origin = Literal[
+    "open-webui",
+    "ha-voice",
+    "android",
+    "observer",
+    "scheduled",
+    "manual",
+]
+
+Requester = Literal["rob", "renee", "system"]
+
+Priority = Literal["low", "normal", "high", "urgent"]
+
+DataTier = Literal["public", "internal", "restricted"]
+
 
 # ---- Sub-schemas ----
 
@@ -129,6 +150,17 @@ class ActivityLogEntry(BaseModel):
     payload_hash: str | None = None  # not the payload itself
 
 
+class RetryPolicy(BaseModel):
+    """Retry policy carried on the task envelope (HOMELAB-SPEC Layer 5).
+
+    Honored by the queue substrate when it lands (Phase 4). Until then this
+    is informational — `/inbox` does not retry on its own, the caller does.
+    """
+
+    max_attempts: int = Field(default=1, ge=1)
+    backoff_seconds: int = Field(default=0, ge=0)
+
+
 # ---- Main graph state ----
 
 
@@ -140,6 +172,22 @@ class FleetState(BaseModel):
     source: Source
     content: str = Field(description="Raw inbox content (voice transcript, text, etc.)")
     user: str = "rob"
+
+    # --- task envelope (HOMELAB-SPEC Layer 5; additive, all optional) ---
+    #
+    # These propagate from `InboxRequest` so they're visible to every node.
+    # Behavior wiring lands in Phase 3 (idempotency, redaction, allowlist,
+    # trace_id propagation); this addition is schema-only.
+    trace_id: str | None = None
+    origin: Origin | None = None
+    requester: Requester | None = None
+    intent_envelope: Intent | None = None
+    priority: Priority = "normal"
+    destructive: bool | None = None
+    idempotency_key: str | None = None
+    ttl_seconds: int | None = None
+    retry_policy: RetryPolicy | None = None
+    data_tier: DataTier = "internal"
 
     # --- routing ---
     triage: TriageDecision | None = None
@@ -166,9 +214,7 @@ class FleetState(BaseModel):
     # LangGraph treats list fields as replace, so a triager → specialist →
     # supervisor cascade would silently lose earlier audit entries when the
     # supervisor node returns an updated log.
-    activity_log_entries: Annotated[list[ActivityLogEntry], add] = Field(
-        default_factory=list
-    )
+    activity_log_entries: Annotated[list[ActivityLogEntry], add] = Field(default_factory=list)
 
     # --- meta ---
     started_at: datetime = Field(default_factory=_now_utc)

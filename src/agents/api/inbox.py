@@ -20,7 +20,16 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from agents.observability import get_logger
-from agents.state import FleetState, Source
+from agents.state import (
+    DataTier,
+    FleetState,
+    Intent,
+    Origin,
+    Priority,
+    Requester,
+    RetryPolicy,
+    Source,
+)
 from agents.tools.zulip import ZulipNotConfiguredError, send_dm
 
 logger = logging.getLogger("agents.api.inbox")
@@ -40,6 +49,26 @@ class InboxRequest(BaseModel):
     # The Windmill `zulip-triager-webhook` script passes
     # `message.sender_id` here.
     zulip_user_id: int | None = None
+
+    # --- Task envelope (HOMELAB-SPEC Layer 5; additive, all optional) -------
+    #
+    # These fields are accepted but not yet acted on. Phase 3 wires them:
+    # - `idempotency_key` → dedup at /inbox (3.G)
+    # - `data_tier` → redaction layer before vault/Claude (3.H)
+    # - `requester` → Renee allowlist enforcement (3.I)
+    # - `trace_id` → OTel propagation across mode hops (3.K)
+    # Old callers (Windmill triager, holmesgpt webhook, daily-digest cron)
+    # send none of these; defaults preserve current behavior.
+    trace_id: str | None = None
+    origin: Origin | None = None
+    requester: Requester | None = None
+    intent: Intent | None = None
+    priority: Priority = "normal"
+    destructive: bool | None = None
+    idempotency_key: str | None = None
+    ttl_seconds: int | None = None
+    retry_policy: RetryPolicy | None = None
+    data_tier: DataTier = "internal"
 
 
 class InboxResponse(BaseModel):
@@ -61,15 +90,24 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     # Loki the {agent, task_id, event} triple needed to render the dashboard
     # task-trail viewer. Bindings live in the asyncio task's contextvars and
     # die with the task — no manual unbind needed in the FastAPI request path.
-    structlog.contextvars.bind_contextvars(
-        task_id=req.task_id, source=req.source, user=req.user
-    )
+    structlog.contextvars.bind_contextvars(task_id=req.task_id, source=req.source, user=req.user)
 
     initial_state = FleetState(
         task_id=req.task_id,
         source=req.source,
         content=req.content,
         user=req.user,
+        # Envelope fields propagate from InboxRequest. Defaults match.
+        trace_id=req.trace_id,
+        origin=req.origin,
+        requester=req.requester,
+        intent_envelope=req.intent,
+        priority=req.priority,
+        destructive=req.destructive,
+        idempotency_key=req.idempotency_key,
+        ttl_seconds=req.ttl_seconds,
+        retry_policy=req.retry_policy,
+        data_tier=req.data_tier,
     )
 
     config = {"configurable": {"thread_id": req.task_id}}
@@ -108,11 +146,7 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
 
     # Zulip reply-back path: only fires when the caller is the triager-bot
     # outgoing-webhook and the request carried a user_id to reply to.
-    if (
-        req.source == "zulip"
-        and req.zulip_user_id is not None
-        and output
-    ):
+    if req.source == "zulip" and req.zulip_user_id is not None and output:
         try:
             result = send_dm(req.zulip_user_id, output)
             logger.info(
@@ -131,9 +165,7 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
         except Exception:
             # Best-effort post-back: never fail the request because the
             # secondary Zulip POST broke.
-            logger.exception(
-                "zulip-reply unexpected failure task=%s", req.task_id
-            )
+            logger.exception("zulip-reply unexpected failure task=%s", req.task_id)
 
     return InboxResponse(
         task_id=req.task_id,
