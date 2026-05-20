@@ -100,7 +100,6 @@ def note_maker_node(state: FleetState) -> dict[str, Any]:
 
     return {
         "output": (
-            f"note drafted: {result.path} "
-            f"({result.bytes_written} bytes, domain={draft.domain})"
+            f"note drafted: {result.path} ({result.bytes_written} bytes, domain={draft.domain})"
         ),
     }

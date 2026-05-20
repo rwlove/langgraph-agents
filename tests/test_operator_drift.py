@@ -25,9 +25,7 @@ def _load_drift_module() -> object:
     """Load the hyphenated script as a Python module under the name
     ``check_operator_drift`` so we can call ``check_operator()`` directly
     instead of shelling out and parsing stdout."""
-    spec = importlib.util.spec_from_file_location(
-        "check_operator_drift", _DRIFT_SCRIPT
-    )
+    spec = importlib.util.spec_from_file_location("check_operator_drift", _DRIFT_SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["check_operator_drift"] = module
@@ -51,9 +49,7 @@ def test_operator_drift(drift_module: object) -> None:
     claude_agents = drift_module.CLAUDE_AGENTS  # type: ignore[attr-defined]
     vault_workspaces = drift_module.VAULT_WORKSPACES  # type: ignore[attr-defined]
     if not claude_agents.is_dir() or not vault_workspaces.is_dir():
-        pytest.skip(
-            f"laptop-only drift check: missing {claude_agents} or {vault_workspaces}"
-        )
+        pytest.skip(f"laptop-only drift check: missing {claude_agents} or {vault_workspaces}")
 
     drifts: dict[str, list[str]] = {}
     for slug in drift_module.OPERATOR_SLUGS:  # type: ignore[attr-defined]

@@ -167,9 +167,7 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         # No storage-specific MCP yet (no ceph-mcp / longhorn-mcp); CNPG /
         # Barman CR reads are RBAC-denied at the SA level. Class C+ writes
         # route through errand-runner with signed approval.
-        _READ_ONLY_KUBECTL
-        + _READ_ONLY_PROMETHEUS
-        + _READ_ONLY_GRAFANA
+        _READ_ONLY_KUBECTL + _READ_ONLY_PROMETHEUS + _READ_ONLY_GRAFANA
     ),
     "smart-home-operator": frozenset(
         # HA + protocol hubs + HA-adjacent kubectl reads (for `home` ns
@@ -187,10 +185,7 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         # + ML metrics via prom/grafana, searxng for model card / vendor
         # research. Pulls / helmrelease bumps / tool toggles route through
         # errand-runner with signed approval.
-        _READ_ONLY_KUBECTL
-        + _READ_ONLY_PROMETHEUS
-        + _READ_ONLY_GRAFANA
-        + _READ_ONLY_SEARXNG
+        _READ_ONLY_KUBECTL + _READ_ONLY_PROMETHEUS + _READ_ONLY_GRAFANA + _READ_ONLY_SEARXNG
     ),
     "observability-operator": frozenset(
         # PrometheusRule / ServiceMonitor / AlertmanagerConfig reads via
@@ -221,11 +216,7 @@ def is_allowed(agent_id: AgentId, server: str, method: str) -> bool:
 
 def agents_with_write_capability() -> set[AgentId]:
     """Used by the test suite to assert errand-runner is the only writer."""
-    return {
-        agent_id
-        for agent_id, caps in ALLOWLISTS.items()
-        if any(c.write for c in caps)
-    }
+    return {agent_id for agent_id, caps in ALLOWLISTS.items() if any(c.write for c in caps)}
 
 
 @dataclass(frozen=True)

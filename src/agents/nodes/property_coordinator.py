@@ -27,9 +27,7 @@ Tier = Literal["1", "2", "3", "4"]
 class PropertyAction(BaseModel):
     description: str
     tier: Tier = Field(
-        description=(
-            "1=safety-critical, 2=this-season, 3=opportunistic, 4=nice-to-have"
-        )
+        description=("1=safety-critical, 2=this-season, 3=opportunistic, 4=nice-to-have")
     )
     blockers: list[str] = Field(default_factory=list)
     vendor: str | None = Field(
@@ -62,9 +60,7 @@ def _render_markdown(plan: PropertyPlan, task_id: str) -> str:
     def _action(a: PropertyAction) -> str:
         vendor = f" ({a.vendor})" if a.vendor else ""
         cost = f" — ~${a.cost_estimate_usd:.0f}" if a.cost_estimate_usd else ""
-        blockers = (
-            f"\n  Blocked on: {', '.join(a.blockers)}" if a.blockers else ""
-        )
+        blockers = f"\n  Blocked on: {', '.join(a.blockers)}" if a.blockers else ""
         return f"- **Tier {a.tier}** — {a.description}{vendor}{cost}{blockers}"
 
     def _bullets(items: list[str]) -> str:

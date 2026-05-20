@@ -121,8 +121,7 @@ def _find_dead_links() -> list[tuple[Path, str]]:
 def _render_markdown(digest: ReviewerDigest, day: date) -> str:
     def _aging(item: TodoAgeReport) -> str:
         return (
-            f"- **{item.tier}** `{item.file_path}` "
-            f"(last {item.last_modified}) — {item.suggestion}"
+            f"- **{item.tier}** `{item.file_path}` (last {item.last_modified}) — {item.suggestion}"
         )
 
     def _drift(item: DriftFinding) -> str:
@@ -167,15 +166,21 @@ def reviewer_node(state: FleetState) -> dict[str, Any]:
     aging = _find_aging_todos()
     dead = _find_dead_links()
 
-    aging_summary = "\n".join(
-        f"- {p.relative_to(get_settings().vault_root)} (mtime {m.date().isoformat()}, age tier {t})"
-        for p, m, t in aging[:50]
-    ) or "(no aging TODOs)"
+    vault_root = get_settings().vault_root
+    aging_summary = (
+        "\n".join(
+            f"- {p.relative_to(vault_root)} (mtime {m.date().isoformat()}, age tier {t})"
+            for p, m, t in aging[:50]
+        )
+        or "(no aging TODOs)"
+    )
 
-    dead_summary = "\n".join(
-        f"- {p.relative_to(get_settings().vault_root)} → [[{ref}]]"
-        for p, ref in dead[:30]
-    ) or "(no dead links)"
+    dead_summary = (
+        "\n".join(
+            f"- {p.relative_to(get_settings().vault_root)} → [[{ref}]]" for p, ref in dead[:30]
+        )
+        or "(no dead links)"
+    )
 
     messages = [
         SystemMessage(content=persona),

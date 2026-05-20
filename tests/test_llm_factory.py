@@ -59,8 +59,7 @@ def test_agent_group_covers_every_agent_id() -> None:
     """
     expected: set[str] = set(get_args(AgentId))
     assert set(AGENT_GROUP) == expected, (
-        f"AGENT_GROUP missing {expected - set(AGENT_GROUP)}, "
-        f"extra {set(AGENT_GROUP) - expected}"
+        f"AGENT_GROUP missing {expected - set(AGENT_GROUP)}, extra {set(AGENT_GROUP) - expected}"
     )
 
 
@@ -164,9 +163,10 @@ def test_local_p40_has_no_blackwell_fallback(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
-        LocalOllamaUnavailable
-    ) as excinfo:
+    with (
+        patch("agents.llm.service_healthy", return_value=False),
+        pytest.raises(LocalOllamaUnavailable) as excinfo,
+    ):
         llm("triager")
 
     assert excinfo.value.failed_group == "local-p40"
@@ -182,9 +182,10 @@ def test_local_spark_raises_with_failed_group_local_spark_when_both_down(
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
-        LocalOllamaUnavailable
-    ) as excinfo:
+    with (
+        patch("agents.llm.service_healthy", return_value=False),
+        pytest.raises(LocalOllamaUnavailable) as excinfo,
+    ):
         llm("reporter")  # reporter is local-spark
     assert excinfo.value.group == "local-spark"
     assert excinfo.value.failed_group == "local-spark"
@@ -203,9 +204,10 @@ def test_local_spark_coder_raises_with_failed_group_local_spark_coder_when_both_
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
-        LocalOllamaUnavailable
-    ) as excinfo:
+    with (
+        patch("agents.llm.service_healthy", return_value=False),
+        pytest.raises(LocalOllamaUnavailable) as excinfo,
+    ):
         llm("coder")  # coder is local-spark-coder
     assert excinfo.value.group == "local-spark-coder"
     assert excinfo.value.failed_group == "local-spark-coder"

@@ -115,6 +115,7 @@ def _make_fake_reporter(extra_writes: int) -> Callable[[Any], dict[str, Any]]:
     more serde + write bytes per checkpoint. Useful for stressing the
     write path without making the harness depend on a real LLM.
     """
+
     def _node(state: Any) -> dict[str, Any]:
         # A list-typed return field bloats the checkpoint payload.
         # FleetState.activity_log is the obvious target.
@@ -124,6 +125,7 @@ def _make_fake_reporter(extra_writes: int) -> Callable[[Any], dict[str, Any]]:
             # Using a recognized field keeps the state schema happy.
         }
         _ = extra_writes  # acknowledge param for future amplification
+
     return _node
 
 
@@ -164,7 +166,8 @@ async def _snapshot_pg_activity(database_url: str) -> dict[str, Any]:
     """Server-side view of what postgres thinks is happening."""
     try:
         async with await psycopg.AsyncConnection.connect(
-            database_url, connect_timeout=2,
+            database_url,
+            connect_timeout=2,
         ) as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -352,8 +355,7 @@ def _wait_for_postgres(database_url: str, timeout_s: float = 30.0) -> None:
         except Exception:
             time.sleep(1)
     raise SystemExit(
-        f"postgres at {database_url} not reachable after {timeout_s}s — "
-        f"is docker-compose up?"
+        f"postgres at {database_url} not reachable after {timeout_s}s — is docker-compose up?"
     )
 
 
@@ -391,8 +393,7 @@ def _emit_summary_and_artifact(
     for r in results:
         suffix = f"  [{r.error}]" if r.error else ""
         print(
-            f"  task={r.task_id:>14s}  status={r.status:>20s}  "
-            f"elapsed={r.elapsed_s:7.2f}s{suffix}"
+            f"  task={r.task_id:>14s}  status={r.status:>20s}  elapsed={r.elapsed_s:7.2f}s{suffix}"
         )
 
     max_blocked = max((s.checkpoint_blocked_at_aenter for s in samples), default=0)
@@ -517,14 +518,9 @@ async def _run(args: argparse.Namespace) -> int:
                 # Take a final snapshot before cancelling so the artifact
                 # shows the parking point at moment-of-give-up.
                 try:
-                    final = await asyncio.wait_for(
-                        client.get("/admin/asyncio-tasks"), timeout=5.0
-                    )
+                    final = await asyncio.wait_for(client.get("/admin/asyncio-tasks"), timeout=5.0)
                     tasks_dump = final.json() if final.status_code == 200 else []
-                    blocked = [
-                        t for t in tasks_dump
-                        if _is_checkpoint_blocked_at_aenter(t)
-                    ]
+                    blocked = [t for t in tasks_dump if _is_checkpoint_blocked_at_aenter(t)]
                     pg = await _snapshot_pg_activity(args.postgres_url)
                     samples.append(
                         _Sample(

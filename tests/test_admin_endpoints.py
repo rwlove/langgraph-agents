@@ -61,9 +61,7 @@ def test_timeout_tier_404_when_task_unknown(temp_vault: Path) -> None:
     app = _make_app_with_graph(temp_vault)
     app.state.graph = fake_graph
     with TestClient(app) as client:
-        r = client.post(
-            "/admin/tasks/unknown-task/timeout-tier", json={"tier": "30min"}
-        )
+        r = client.post("/admin/tasks/unknown-task/timeout-tier", json={"tier": "30min"})
         assert r.status_code == 404
 
 
@@ -125,6 +123,7 @@ def _empty_alist() -> AsyncIterator[Any]:
     async def _gen() -> AsyncIterator[Any]:
         if False:  # never yields
             yield None
+
     return _gen()
 
 
@@ -285,8 +284,7 @@ def test_costs_today_tolerates_malformed_log(temp_vault: Path) -> None:
     cost_dir = temp_vault / "reports" / "costs"
     cost_dir.mkdir(parents=True)
     (cost_dir / f"{today}.jsonl").write_text(
-        '{"agent": "coder", "cost_usd": 1.0}\n'
-        'this is not json\n'
+        '{"agent": "coder", "cost_usd": 1.0}\nthis is not json\n'
     )
 
     app = _make_app_with_graph(temp_vault)

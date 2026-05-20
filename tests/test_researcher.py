@@ -67,9 +67,7 @@ def test_researcher_passes_vault_grep_context_to_llm(temp_vault: Path) -> None:
     # Plant a vault memory that matches the query
     proj = temp_vault / "projects" / "home-ops" / "memory"
     proj.mkdir(parents=True)
-    (proj / "MEMORY.md").write_text(
-        "P40 VRAM budget steady at 14.5 GiB across 6 consumers\n"
-    )
+    (proj / "MEMORY.md").write_text("P40 VRAM budget steady at 14.5 GiB across 6 consumers\n")
 
     state = FleetState(task_id="t-201", source="test", content="P40 VRAM budget")
 
@@ -97,9 +95,7 @@ def test_extract_search_terms_drops_stopwords() -> None:
 
 
 def test_extract_search_terms_caps_at_six() -> None:
-    terms = _extract_search_terms(
-        "alpha beta gamma delta epsilon zeta eta theta iota kappa"
-    )
+    terms = _extract_search_terms("alpha beta gamma delta epsilon zeta eta theta iota kappa")
     assert len(terms) == 6
 
 

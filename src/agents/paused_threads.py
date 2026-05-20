@@ -72,9 +72,7 @@ def _update_gauge(threads: list[dict[str, Any]]) -> None:
     """
     stale_count = sum(1 for t in threads if t["is_stale"])
     langgraph_paused_threads.labels(is_stale="true").set(stale_count)
-    langgraph_paused_threads.labels(is_stale="false").set(
-        len(threads) - stale_count
-    )
+    langgraph_paused_threads.labels(is_stale="false").set(len(threads) - stale_count)
 
 
 async def _parse_created_at(value: str | None) -> datetime | None:
@@ -134,34 +132,24 @@ async def sweep_paused_threads(
         seen.add(thread_id)
 
         snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-        interrupts_raw = [
-            i
-            for t in snapshot.tasks
-            for i in t.interrupts
-        ]
+        interrupts_raw = [i for t in snapshot.tasks for i in t.interrupts]
         if not interrupts_raw:
             continue
 
         created_at = await _parse_created_at(snapshot.created_at)
-        paused_for = (
-            (now - created_at).total_seconds() if created_at is not None else None
-        )
+        paused_for = (now - created_at).total_seconds() if created_at is not None else None
 
         out.append(
             {
                 "thread_id": thread_id,
                 "paused_since": snapshot.created_at,
                 "paused_for_seconds": paused_for,
-                "is_stale": (
-                    paused_for is not None and paused_for > stale_after_seconds
-                ),
+                "is_stale": (paused_for is not None and paused_for > stale_after_seconds),
                 "interrupts": [
                     {
                         "id": getattr(i, "id", None),
                         "value": (
-                            dict(i.value)
-                            if isinstance(getattr(i, "value", None), dict)
-                            else None
+                            dict(i.value) if isinstance(getattr(i, "value", None), dict) else None
                         ),
                     }
                     for i in interrupts_raw

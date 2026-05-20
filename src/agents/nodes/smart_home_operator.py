@@ -131,10 +131,7 @@ class SmartHomeFinding(BaseModel):
     )
     references: list[str] = Field(
         default_factory=list,
-        description=(
-            "Vault paths, memory entries, ha_*-tool outputs cited, "
-            "ha-config repo paths."
-        ),
+        description=("Vault paths, memory entries, ha_*-tool outputs cited, ha-config repo paths."),
     )
 
 

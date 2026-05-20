@@ -23,13 +23,9 @@ from agents.state import ApprovalRequest, FleetState
 def _fake_safe_finding() -> StorageFinding:
     """A propose-class finding that doesn't touch the recovery path."""
     return StorageFinding(
-        summary=(
-            "New paperless-ngx PVC needed: 50Gi on ceph-block for document "
-            "scans + thumbs."
-        ),
+        summary=("New paperless-ngx PVC needed: 50Gi on ceph-block for document scans + thumbs."),
         failure_domain=(
-            "Only the new paperless-ngx workload sees a missing PVC; nothing "
-            "existing is affected."
+            "Only the new paperless-ngx workload sees a missing PVC; nothing existing is affected."
         ),
         proposed_change=(
             "Apply PVC manifest at "
@@ -48,8 +44,7 @@ def _fake_safe_finding() -> StorageFinding:
             "or any pool quota. No other workload references this PVC."
         ),
         capacity_check=(
-            "Ceph pool replicapool free: ~3.2 TiB; 50Gi requested; "
-            "headroom > 2x check passes."
+            "Ceph pool replicapool free: ~3.2 TiB; 50Gi requested; headroom > 2x check passes."
         ),
         rollback=(
             "kubectl delete pvc -n collab paperless-ngx-data\n"
@@ -98,9 +93,7 @@ def _fake_recovery_path_finding() -> StorageFinding:
             "future incident requiring replay-from-backup older than 3d. No "
             "other CNPG clusters affected (this is a per-ObjectStore setting)."
         ),
-        capacity_check=(
-            "N/A — retention reduction frees space, doesn't grow footprint."
-        ),
+        capacity_check=("N/A — retention reduction frees space, doesn't grow footprint."),
         rollback=(
             "Revert the ObjectStore CR retention field from 3d back to 7d:\n"
             "  spec.retentionPolicy: '7d'\n"

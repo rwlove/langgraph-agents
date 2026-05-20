@@ -61,8 +61,7 @@ def _render_markdown(draft: MedicalDraft, task_id: str) -> str:
         "status: drafted-for-review\n"
         "---\n\n"
         f"# {draft.title}\n\n"
-        f"{draft.body}\n"
-        + (f"\n## Tags\n{tags}\n" if tags else "")
+        f"{draft.body}\n" + (f"\n## Tags\n{tags}\n" if tags else "")
     )
 
 

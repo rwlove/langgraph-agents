@@ -13,7 +13,7 @@ import logging
 import sys
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 import uvicorn
 from fastapi import FastAPI, Response
@@ -36,6 +36,9 @@ from agents.observability import (
     metrics_text,
 )
 from agents.paused_threads import startup_log_paused_threads
+from agents.queue import TaskQueue
+from agents.queue.migrate import ensure_schema as ensure_queue_schema
+from agents.queue.worker import QueueWorker
 from agents.settings import Settings, get_settings
 from agents.state import (
     ActivityLogEntry,
@@ -159,6 +162,19 @@ async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]
     return await _try_postgres()
 
 
+def _checkpointer_pool(checkpointer: BaseCheckpointSaver[Any]) -> AsyncConnectionPool | None:
+    """Return the AsyncConnectionPool the checkpointer is using, or None.
+
+    The AsyncPostgresSaver instance carries the pool as `.conn`. In the
+    MemorySaver dev path there is no pool — return None and the queue
+    worker stays disabled (the dev path never enqueues real work).
+    """
+    conn = getattr(checkpointer, "conn", None)
+    if conn is None or not hasattr(conn, "connection"):
+        return None
+    return cast("AsyncConnectionPool[Any]", conn)
+
+
 async def _build_store(stack: AsyncExitStack, settings: Settings) -> MCPMemoryStore | None:
     """Build the long-term cross-agent KG store, or None to disable.
 
@@ -233,6 +249,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             default_ttl_seconds=settings.idempotency_ttl_seconds,
         )
         stack.push_async_callback(app.state.dedup_store.close)
+
+        # Phase 4.M2 — task queue substrate. Reuses the checkpointer's
+        # Postgres pool (same CNPG cluster, same Barman backup line).
+        # `ensure_schema` applies idempotent migrations on startup. The
+        # `QueueWorker` runs as a background asyncio task draining the
+        # queue and invoking the graph (the work the synchronous /inbox
+        # used to do inline).
+        queue_pool = _checkpointer_pool(checkpointer)
+        app.state.queue_pool = queue_pool
+        if queue_pool is not None:
+            await ensure_queue_schema(queue_pool)
+            app.state.task_queue = TaskQueue(queue_pool)
+            worker = QueueWorker(
+                queue=app.state.task_queue,
+                pool=queue_pool,
+                graph=app.state.graph,
+            )
+            worker_task = asyncio.create_task(worker.run())
+            app.state.queue_worker_task = worker_task
+            stack.push_async_callback(worker.stop)
+            logger.info("queue worker started")
+        else:
+            app.state.task_queue = None
+            app.state.queue_worker_task = None
+            logger.warning("queue worker NOT started (no Postgres pool — dev/MemorySaver path)")
+
         logger.info(
             "fleet graph compiled; entrypoint=triager; store=%s",
             "MCPMemoryStore" if store is not None else "disabled",
@@ -267,6 +309,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("shutting down")
         if sweep_task is not None and not sweep_task.done():
             sweep_task.cancel()
+        worker_task = app.state.queue_worker_task
+        if worker_task is not None and not worker_task.done():
+            worker_task.cancel()
         flush_langfuse()
 
 

@@ -61,12 +61,14 @@ def _fake_triager_returning(target: str) -> Callable[[FleetState], dict[str, Any
             reasoning="fake",
         )
         return {"triage": decision, "target_agent": target}
+
     return _node
 
 
 def _fake_reporter() -> Callable[[FleetState], dict[str, Any]]:
     def _node(state: FleetState) -> dict[str, Any]:
         return {"output": "fake reporter output"}
+
     return _node
 
 
@@ -78,8 +80,12 @@ async def reset_db() -> AsyncIterator[None]:
         async with conn.cursor() as cur:
             # setup() will recreate; drop is fine. Wrapped in EXISTS so a
             # fresh DB doesn't error on the first run.
-            for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints",
-                          "checkpoint_migrations"):
+            for table in (
+                "checkpoint_writes",
+                "checkpoint_blobs",
+                "checkpoints",
+                "checkpoint_migrations",
+            ):
                 await cur.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
     yield
 

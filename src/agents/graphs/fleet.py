@@ -50,9 +50,7 @@ _DEFAULT_ACTION_CLASS: dict[str, ActionClass] = {
 }
 
 
-def _with_activity_log(
-    agent_id: AgentId, fn: Callable[[FleetState], dict[str, Any]]
-) -> Any:
+def _with_activity_log(agent_id: AgentId, fn: Callable[[FleetState], dict[str, Any]]) -> Any:
     """Wrap a node so each invocation logs to the per-agent activity log.
 
     Best-effort: if the log write fails (vault unmounted, perms, etc.) we
@@ -63,6 +61,7 @@ def _with_activity_log(
     set uses internal `_Node` protocols that a plain Callable doesn't match
     under strict mypy. The runtime accepts any callable.
     """
+
     def wrapper(state: FleetState) -> dict[str, Any]:
         # Bind `agent` on structlog contextvars so any structlog event the
         # node emits carries the agent label. The outer /inbox or /approval
@@ -105,6 +104,7 @@ def _with_activity_log(
             logger.warning("activity log write failed for %s: %s", agent_id, exc)
         structlog.contextvars.reset_contextvars(**token)
         return result
+
     wrapper.__name__ = fn.__name__
     return cast(Any, wrapper)
 
@@ -134,10 +134,7 @@ def _route_after_specialist(state: FleetState) -> AgentId | str:
     """
     if state.rejection is not None:
         return "supervisor"
-    if (
-        state.approval_request is not None
-        and state.target_agent == "errand-runner"
-    ):
+    if state.approval_request is not None and state.target_agent == "errand-runner":
         return "errand-runner"
     return END
 

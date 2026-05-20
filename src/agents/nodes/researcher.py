@@ -71,29 +71,57 @@ def _extract_search_terms(content: str) -> list[str]:
     return out[:6]  # cap; the LLM will see the matching lines anyway
 
 
-_STOPWORDS: frozenset[str] = frozenset({
-    "what", "where", "when", "which", "have", "this", "that", "with", "from",
-    "into", "should", "would", "could", "about", "there", "their", "they",
-    "your", "yours", "mine", "ours", "rob", "user", "claude", "agent",
-    "please", "thank", "thanks", "hello", "okay",
-})
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "what",
+        "where",
+        "when",
+        "which",
+        "have",
+        "this",
+        "that",
+        "with",
+        "from",
+        "into",
+        "should",
+        "would",
+        "could",
+        "about",
+        "there",
+        "their",
+        "they",
+        "your",
+        "yours",
+        "mine",
+        "ours",
+        "rob",
+        "user",
+        "claude",
+        "agent",
+        "please",
+        "thank",
+        "thanks",
+        "hello",
+        "okay",
+    }
+)
 
 
 def _format_vault_context(hits: list[VaultGrepHit]) -> str:
     if not hits:
         return "(no vault matches for derived search terms)"
-    lines = [
-        f"- {hit.path.name}:{hit.line_number} — {hit.excerpt()}"
-        for hit in hits[:30]
-    ]
+    lines = [f"- {hit.path.name}:{hit.line_number} — {hit.excerpt()}" for hit in hits[:30]]
     return "\n".join(lines)
 
 
 def _render_markdown(finding: ResearchFinding, task_id: str, question: str) -> str:
-    sources_block = "\n".join(
-        f"{i}. **{s.name}** — `{s.location}`\n   {s.excerpt}"
-        for i, s in enumerate(finding.sources, 1)
-    ) or "_(no sources surfaced)_"
+    sources_block = (
+        "\n".join(
+            f"{i}. **{s.name}** — `{s.location}`\n   {s.excerpt}"
+            for i, s in enumerate(finding.sources, 1)
+        )
+        or "_(no sources surfaced)_"
+    )
 
     def _bullets(items: list[str]) -> str:
         return "\n".join(f"- {x}" for x in items) if items else "_(none)_"
