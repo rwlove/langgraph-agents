@@ -173,6 +173,19 @@ class Settings(BaseSettings):
     )
 
     # --- cost caps (per security review cat 7) ---
+    # Global daily cap is enforced in `agents.llm._build_claude` against the
+    # in-process `langgraph_cost_usd_total{group="claude"}` Counter sum —
+    # see `agents.observability.global_claude_spend_usd` for the caveats
+    # (process-local; resets on pod restart; no true 24h window).
+    #
+    # The per-task and per-agent caps below are DEFERRED — both require
+    # plumbing `FleetState.accumulated_cost_usd` (and a per-agent
+    # accumulator) through every node in the graph so the factory can
+    # see the per-call context at `_build_claude` time. That's a state-
+    # schema change touching every node, not a one-file diff, so it's
+    # tracked as a follow-up audit item. Settings are kept as load-able
+    # configuration so the values can be tuned ahead of the enforcement
+    # PR without another env-var rollout.
     cost_cap_per_task_usd: float = 5.0
     cost_cap_per_agent_daily_usd: float = 10.0
     cost_cap_global_daily_usd: float = 30.0

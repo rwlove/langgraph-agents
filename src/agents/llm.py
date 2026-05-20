@@ -24,7 +24,11 @@ from langchain_ollama import ChatOllama
 from pydantic import SecretStr
 
 from agents.health import service_healthy
-from agents.observability import LangGraphMetricsCallback, langfuse_callback_handler
+from agents.observability import (
+    LangGraphMetricsCallback,
+    global_claude_spend_usd,
+    langfuse_callback_handler,
+)
 from agents.settings import get_settings
 
 if TYPE_CHECKING:
@@ -64,6 +68,45 @@ class LocalOllamaUnavailable(RuntimeError):
         self.failed_group: ModelGroup = failed_group or group
         super().__init__(
             f"local-Ollama group {self.failed_group!r} unhealthy for agent {agent_id!r}"
+        )
+
+
+class CostCapHit(RuntimeError):
+    """Raised when constructing a Claude client would cross the global daily cap.
+
+    The factory checks ``observability.global_claude_spend_usd()`` (sum of
+    ``langgraph_cost_usd_total{group="claude"}``) against
+    ``settings.cost_cap_global_daily_usd`` BEFORE constructing the
+    ``ChatAnthropic`` instance. Raising here is structurally the same as
+    ``LocalOllamaUnavailable`` — the request returns a typed error the
+    caller can map to a queue state / user-visible message.
+
+    Carries:
+    - ``cap_usd``: the configured cap that was crossed.
+    - ``accumulated_usd``: the in-process Counter sum at the time of the
+      check (process-local; see ``global_claude_spend_usd`` for caveats).
+    - ``agent_id``: the agent the factory was building for.
+
+    Scoped to the GLOBAL DAILY cap only. ``cost_cap_per_task_usd`` and
+    ``cost_cap_per_agent_daily_usd`` are still defined in settings but
+    not yet enforced — they need ``FleetState.accumulated_cost_usd``
+    plumbed through every node, which is a bigger refactor. Documented
+    in ``settings.py`` next to those fields.
+    """
+
+    def __init__(
+        self,
+        *,
+        cap_usd: float,
+        accumulated_usd: float,
+        agent_id: AgentId,
+    ) -> None:
+        self.cap_usd = cap_usd
+        self.accumulated_usd = accumulated_usd
+        self.agent_id: AgentId = agent_id
+        super().__init__(
+            f"Claude cost cap hit for agent {agent_id!r}: "
+            f"accumulated ${accumulated_usd:.4f} USD >= cap ${cap_usd:.2f} USD"
         )
 
 
@@ -230,6 +273,23 @@ def _build_claude(
     if settings.anthropic_api_key is None:
         msg = "ANTHROPIC_API_KEY required for Claude path but is None"
         raise RuntimeError(msg)
+
+    # Global daily cost cap (P3.1). Process-local Counter; see
+    # ``observability.global_claude_spend_usd`` for the caveats around
+    # pod restart + the lack of a true 24h window. The cap fires
+    # BEFORE constructing the ChatAnthropic client so a single
+    # over-cap call can't spend more on top of an already-blown
+    # budget. Per-task and per-agent caps are NOT enforced here yet
+    # — they require FleetState.accumulated_cost_usd plumbing; see
+    # the comment in settings.py.
+    accumulated = global_claude_spend_usd()
+    if accumulated >= settings.cost_cap_global_daily_usd:
+        raise CostCapHit(
+            cap_usd=settings.cost_cap_global_daily_usd,
+            accumulated_usd=accumulated,
+            agent_id=agent_id,
+        )
+
     callbacks: list[BaseCallbackHandler] = [
         LangGraphMetricsCallback(
             agent=agent_id, group=effective_group, model=settings.claude_model
@@ -249,6 +309,7 @@ def _build_claude(
 __all__ = [
     "AGENT_GROUP",
     "GROUP_MODELS",
+    "CostCapHit",
     "LocalOllamaUnavailable",
     "ModelGroup",
     "llm",
