@@ -52,6 +52,12 @@ dependencies = [
     # the Redis protocol; Dragonfly emulates it at sub-ms latency.
     "redis>=5.0.0",
 
+    # ULID generation for the CNPG-backed task queue (Phase 4.M1).
+    # Lexicographically sortable monotonic IDs; preferred over uuid4
+    # because they sort by creation time without a separate timestamp
+    # column. python-ulid is pure-Python and stdlib-compatible.
+    "python-ulid>=2.0.0",
+
     # OpenTelemetry — Phase 3.K trace propagation. SDK + OTLP gRPC
     # exporter pointed at the in-cluster collector deployed in 2.J2.
     # FastAPI instrumentation auto-spans /inbox requests; httpx
