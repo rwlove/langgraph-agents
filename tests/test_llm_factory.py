@@ -79,15 +79,36 @@ def test_local_spark_returns_chat_ollama_when_spark_healthy(
     monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
     with patch("agents.llm.service_healthy", return_value=True):
-        model = llm("coder")  # coder is local-spark
+        model = llm("reporter")  # reporter is local-spark
     assert isinstance(model, ChatOllama)
     assert "spark.test" in model.base_url
     assert model.model == "qwen2.5:32b"
     handler = _metrics_handler(model)
     assert handler is not None
-    assert handler.agent == "coder"
+    assert handler.agent == "reporter"
     assert handler.group == "local-spark"
     assert handler.model == "qwen2.5:32b"
+
+
+def test_local_spark_coder_returns_chat_ollama_when_spark_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """coder/reviewer route to the dedicated coder model on Spark.
+
+    Same Ollama instance as local-spark — only the model name differs.
+    """
+    monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+    with patch("agents.llm.service_healthy", return_value=True):
+        model = llm("coder")  # coder is local-spark-coder
+    assert isinstance(model, ChatOllama)
+    assert "spark.test" in model.base_url
+    assert model.model == "qwen2.5-coder:32b"
+    handler = _metrics_handler(model)
+    assert handler is not None
+    assert handler.agent == "coder"
+    assert handler.group == "local-spark-coder"
+    assert handler.model == "qwen2.5-coder:32b"
 
 
 def test_local_p40_returns_chat_ollama_when_p40_healthy(
@@ -113,7 +134,9 @@ def test_local_spark_degrades_to_p40_when_spark_unhealthy(
     """Spark down → heavy-agent call routes to P40 (degraded quality, not down).
 
     Critically, the metric metadata reflects the EFFECTIVE group (local-p40)
-    so Grafana shows the actual routing, not the requested group.
+    so Grafana shows the actual routing, not the requested group. Coder
+    requests degrade to the same P40 general model — qwen2.5:7b's coding
+    ability is weak, but the request doesn't fail.
     """
     monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
@@ -122,10 +145,10 @@ def test_local_spark_degrades_to_p40_when_spark_unhealthy(
         return "p40.test" in url  # P40 up, Spark down
 
     with patch("agents.llm.service_healthy", side_effect=_health):
-        model = llm("coder")
+        model = llm("coder")  # local-spark-coder, degrades to P40
     assert isinstance(model, ChatOllama)
     assert "p40.test" in model.base_url
-    assert model.model == "qwen2.5:7b"  # the degraded model, NOT the original 32b
+    assert model.model == "qwen2.5:7b"  # the degraded model, NOT the original coder 32b
     handler = _metrics_handler(model)
     assert handler is not None
     # Effective group is local-p40 (the one actually serving) so metric labels
@@ -162,9 +185,30 @@ def test_local_spark_raises_with_failed_group_local_spark_when_both_down(
     with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
         LocalOllamaUnavailable
     ) as excinfo:
-        llm("coder")  # coder is local-spark
+        llm("reporter")  # reporter is local-spark
     assert excinfo.value.group == "local-spark"
     assert excinfo.value.failed_group == "local-spark"
+
+
+def test_local_spark_coder_raises_with_failed_group_local_spark_coder_when_both_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both local paths down for a coder request → raise with the originally-requested group.
+
+    The /inbox queue routes retries by `failed_group`, so reporting the
+    distinct group preserves coder-specific recovery semantics (don't retry
+    on Spark coming back if the general model is what's healthy, etc.).
+    """
+    monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
+        LocalOllamaUnavailable
+    ) as excinfo:
+        llm("coder")  # coder is local-spark-coder
+    assert excinfo.value.group == "local-spark-coder"
+    assert excinfo.value.failed_group == "local-spark-coder"
 
 
 def test_health_tracker_never_escalates_to_claude(
