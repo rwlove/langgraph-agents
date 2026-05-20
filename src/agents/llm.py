@@ -37,6 +37,7 @@ from agents.observability import (
     langfuse_callback_handler,
     task_spend_usd,
 )
+from agents.redaction import assert_emission_allowed
 from agents.settings import get_settings
 
 if TYPE_CHECKING:
@@ -208,17 +209,13 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
     group: ModelGroup = group_override or AGENT_GROUP[agent_id]
 
     if escalate and settings.anthropic_api_key:
-        return _build_claude(
-            settings, agent_id, "claude", temperature=temperature, trigger=trigger
-        )
+        return _build_claude(settings, agent_id, "claude", temperature=temperature, trigger=trigger)
 
     if group == "claude":
         if not settings.anthropic_api_key:
             msg = f"agent {agent_id!r} requested Claude but ANTHROPIC_API_KEY is not set"
             raise RuntimeError(msg)
-        return _build_claude(
-            settings, agent_id, "claude", temperature=temperature, trigger=trigger
-        )
+        return _build_claude(settings, agent_id, "claude", temperature=temperature, trigger=trigger)
 
     if group in ("local-spark", "local-spark-coder"):
         if service_healthy(settings.ollama_spark_url):
@@ -261,9 +258,7 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
             trigger=trigger,
         )
     if settings.degraded_mode_escalation_enabled and settings.anthropic_api_key:
-        return _build_claude(
-            settings, agent_id, "claude", temperature=temperature, trigger=trigger
-        )
+        return _build_claude(settings, agent_id, "claude", temperature=temperature, trigger=trigger)
     raise LocalOllamaUnavailable(group, agent_id, failed_group="local-p40")
 
 
@@ -328,6 +323,14 @@ def _build_claude(
     if settings.anthropic_api_key is None:
         msg = "ANTHROPIC_API_KEY required for Claude path but is None"
         raise RuntimeError(msg)
+
+    # Phase 3.H — data-tier gate. Restricted-tier tasks never escalate
+    # to a remote model. Raises `RestrictedTierEmissionBlocked` which
+    # the calling node catches as a normal exception (state.output gets
+    # an apologetic stub, the task ends without Claude being touched).
+    # Reads `data_tier` from structlog contextvars; default 'internal'
+    # if unbound, which lets old callers continue to escalate.
+    assert_emission_allowed("claude")
 
     # Cost caps (P3.1 + follow-up). All three caps fire BEFORE
     # constructing the ChatAnthropic client so a single over-cap call
