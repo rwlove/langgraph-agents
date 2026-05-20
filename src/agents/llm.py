@@ -19,11 +19,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_ollama import ChatOllama
 from pydantic import SecretStr
 
 from agents.health import service_healthy
-from agents.observability import LangGraphMetricsCallback
+from agents.observability import LangGraphMetricsCallback, langfuse_callback_handler
 from agents.settings import get_settings
 
 if TYPE_CHECKING:
@@ -203,12 +204,17 @@ def _build_ollama(
     callback, so we don't use that pattern.
     """
     base_url = base_url.removesuffix("/v1").rstrip("/")
-    handler = LangGraphMetricsCallback(agent=agent_id, group=effective_group, model=model)
+    callbacks: list[BaseCallbackHandler] = [
+        LangGraphMetricsCallback(agent=agent_id, group=effective_group, model=model),
+    ]
+    lf = langfuse_callback_handler()
+    if lf is not None:
+        callbacks.append(lf)
     return ChatOllama(
         model=model,
         base_url=base_url,
         temperature=temperature,
-        callbacks=[handler],
+        callbacks=callbacks,
     )
 
 
@@ -224,14 +230,19 @@ def _build_claude(
     if settings.anthropic_api_key is None:
         msg = "ANTHROPIC_API_KEY required for Claude path but is None"
         raise RuntimeError(msg)
-    handler = LangGraphMetricsCallback(
-        agent=agent_id, group=effective_group, model=settings.claude_model
-    )
+    callbacks: list[BaseCallbackHandler] = [
+        LangGraphMetricsCallback(
+            agent=agent_id, group=effective_group, model=settings.claude_model
+        ),
+    ]
+    lf = langfuse_callback_handler()
+    if lf is not None:
+        callbacks.append(lf)
     return ChatAnthropic(  # type: ignore[call-arg]
         model=settings.claude_model,
         api_key=SecretStr(settings.anthropic_api_key),
         temperature=temperature,
-        callbacks=[handler],
+        callbacks=callbacks,
     )
 
 
