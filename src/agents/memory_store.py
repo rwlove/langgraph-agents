@@ -496,12 +496,29 @@ async def build_pool(database_url: str) -> AsyncConnectionPool:
     """Construct + open the asyncpool used by the store.
 
     Caller is responsible for `await pool.close()` (use AsyncExitStack).
+
+    The kwargs mirror what `_build_checkpointer` uses for the
+    checkpointer pool — same in-cluster network semantics, same
+    Cilium-conntrack-can-silently-expire-idle-conns failure mode.
+    `tcp_user_timeout` is the load-bearing fix (kernel kills a conn
+    after 15s of unacked outgoing data); keepalives are
+    defense-in-depth.  See `project_langgraph_reporter_post_node_hang`
+    for the full forensics on why both pools need this.
     """
     pool = AsyncConnectionPool(
         conninfo=database_url,
         min_size=1,
         max_size=5,
-        kwargs={"row_factory": dict_row},
+        kwargs={
+            "row_factory": dict_row,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+            "tcp_user_timeout": 15000,
+        },
+        check=AsyncConnectionPool.check_connection,
+        max_idle=60,
         open=False,
     )
     await pool.open()

@@ -116,6 +116,13 @@ async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]
                 "tcp_user_timeout": 15000,
             },
             check=AsyncConnectionPool.check_connection,
+            # max_idle: preemptively recycle conns that have been idle
+            # in the pool for >60s. tcp_user_timeout protects against
+            # silent half-open mid-op, but recycling idle conns BEFORE
+            # they have a chance to go stale is the simpler primitive:
+            # Cilium conntrack expiry typically lands >60s, so a freshly
+            # recycled conn is virtually never stale at yield time.
+            max_idle=60,
             open=False,
         )
         await stack.enter_async_context(pool)
