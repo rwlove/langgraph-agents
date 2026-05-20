@@ -102,6 +102,8 @@ Zulip DM to Triager 📥 ────▶ Windmill `zulip-triager-webhook`
                             │  langgraph-agents    │ ──HTTP──▶ mcp-gateway (Istio mTLS)
                             │  (FastAPI + LangGraph)│            └─▶ 14 MCP servers
                             │                      │
+                            │                      │ ──OTLP──▶ langfuse-web.ai.svc:3000
+                            │                      │            (per-task trace UI)
                             │  ▲ /approval (resume) │ ◀──── ntfy action buttons (HMAC)
                             │  │                   │
                             │  ▼ checkpoints       │
@@ -143,7 +145,7 @@ src/agents/
 ├── personas.py      # vault-file loader → composed system prompts
 ├── llm.py           # per-agent LLM factory (P40 / Spark / Claude routing)
 ├── memory_store.py  # MCPMemoryStore — long-term cross-agent KG over postgres-langgraph-memory
-├── observability.py # Prom metrics + structlog config + LangGraph metrics callback
+├── observability.py # Prom metrics + structlog config + LangGraph metrics callback + Langfuse (`init_langfuse`, `langfuse_callback_handler`, `flush_langfuse`)
 ├── health.py        # HTTP health check used by the LLM factory's degraded routing
 ├── main.py          # FastAPI app + lifespan (builds checkpointer + store + graph)
 └── settings.py      # pydantic-settings env config
@@ -153,4 +155,4 @@ src/agents/
 
 - **Prometheus** — four metrics (`langgraph_calls_total`, `langgraph_tokens_total`, `langgraph_cost_usd_total`, `langgraph_llm_duration_seconds`) labeled by `agent`, `group`, `model`, `outcome`, `trigger`. Scraped by the `langgraph-agents` ServiceMonitor.
 - **Loki** — structlog JSON to stdout, picked up by Vector. Per-task field is `task_id`.
-- **Langfuse** — per-task trace UI is planned (the `langfuse` dep is in `pyproject.toml`); SDK wiring + cluster deployment land in a follow-up phase.
+- **Langfuse** — per-task trace UI at `https://langfuse.thesteamedcrab.com` (LAN-only, Langfuse-native email/password auth). `langfuse.langchain.CallbackHandler` attaches intrinsically to every `ChatOllama` / `ChatAnthropic` built by `agents.llm.llm()` (and to the OpenWebUI surface in `api/chat_completions.py`). The pod MUST reach Langfuse via the cluster-internal Service URL `http://langfuse-web.ai.svc.cluster.local:3000` — split-horizon DNS + Cilium `toEntities: world` egress don't match the public hostname's internal LB IP, so the OTLP exporter silently times out if the public URL is used.
