@@ -37,7 +37,13 @@ import structlog
 from langchain_core.callbacks import BaseCallbackHandler
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler as LangfuseLangchainCallback
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
 
 from agents.settings import get_settings
 
@@ -81,6 +87,19 @@ langgraph_llm_duration_seconds = Histogram(
     "Wall-clock duration of LLM invocations.",
     _LABELS_COST,
     buckets=(0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300),
+)
+
+# Updated by ``agents.paused_threads.sweep_paused_threads`` on every
+# sweep (startup lifecycle hook + /admin/paused-threads endpoint).
+# Label values are strings ("true" / "false") because Prometheus
+# label values can't be booleans.
+#
+# Operator alert: stale=="true" > 0 sustained → operator should check
+# /admin/paused-threads for thread IDs awaiting an /approval verdict.
+langgraph_paused_threads = Gauge(
+    "langgraph_paused_threads",
+    "Number of LangGraph threads currently paused at an interrupt, by staleness.",
+    ("is_stale",),
 )
 
 
@@ -423,6 +442,7 @@ __all__ = [
     "langgraph_calls_total",
     "langgraph_cost_usd_total",
     "langgraph_llm_duration_seconds",
+    "langgraph_paused_threads",
     "langgraph_tokens_total",
     "llm_timer",
     "metrics_text",

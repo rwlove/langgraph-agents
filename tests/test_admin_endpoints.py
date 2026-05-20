@@ -13,7 +13,17 @@ from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import MemorySaver
 
 from agents.api import admin
+from agents.observability import langgraph_paused_threads
 from agents.state import ALL_AGENT_IDS
+
+
+def _read_paused_gauge(is_stale: str) -> float:
+    """Read the current value of the paused-threads gauge for one label."""
+    for metric in langgraph_paused_threads.collect():
+        for sample in metric.samples:
+            if sample.labels.get("is_stale") == is_stale:
+                return sample.value
+    return 0.0
 
 
 def _make_app_with_graph(temp_vault: Path) -> FastAPI:
@@ -203,6 +213,39 @@ def test_paused_threads_reports_paused_with_staleness(temp_vault: Path) -> None:
 
         assert by_id["fresh-1"]["is_stale"] is False
         assert by_id["fresh-1"]["paused_for_seconds"] < 60
+
+        # Gauge should reflect the sweep: 1 stale, 1 non-stale.
+        assert _read_paused_gauge("true") == 1.0
+        assert _read_paused_gauge("false") == 1.0
+
+
+def test_paused_threads_gauge_resets_when_sweep_empty(temp_vault: Path) -> None:
+    """After a populated sweep, an empty sweep must zero the gauge for both labels.
+
+    Prevents a "phantom stale" — once a thread resumes (or the pod
+    restarts after dropping the checkpoint), the next sweep must
+    bring the gauge back to 0 so the alert clears.
+    """
+    # Pre-populate the gauge with non-zero values via a direct call.
+    langgraph_paused_threads.labels(is_stale="true").set(7)
+    langgraph_paused_threads.labels(is_stale="false").set(3)
+    assert _read_paused_gauge("true") == 7.0
+
+    fake_graph = MagicMock()
+    fake_checkpointer = MagicMock()
+    fake_checkpointer.alist = MagicMock(side_effect=lambda *a, **kw: _empty_alist())
+    fake_graph.checkpointer = fake_checkpointer
+
+    app = _make_app_with_graph(temp_vault)
+    app.state.graph = fake_graph
+    with TestClient(app) as client:
+        r = client.get("/admin/paused-threads")
+        assert r.status_code == 200
+        assert r.json() == []
+
+    # Both labels reset to 0.
+    assert _read_paused_gauge("true") == 0.0
+    assert _read_paused_gauge("false") == 0.0
 
 
 def test_paused_threads_skips_threads_without_interrupts(
