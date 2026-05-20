@@ -19,6 +19,7 @@ from fastapi import FastAPI, Response
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg_pool import AsyncConnectionPool
 
 from agents.api import admin, approval, chat_completions, health, inbox
@@ -26,6 +27,27 @@ from agents.graphs.fleet import build_fleet_graph
 from agents.memory_store import MCPMemoryStore, build_pool
 from agents.observability import configure_structlog, metrics_text
 from agents.settings import Settings, get_settings
+from agents.state import (
+    ActivityLogEntry,
+    ApprovalRequest,
+    FleetState,
+    RejectionSignal,
+    TriageDecision,
+)
+
+# Pydantic models that ride inside FleetState across checkpoint boundaries.
+# langgraph-checkpoint 4.x serde issues a deprecation warning ("Deserializing
+# unregistered type ...") for any non-allowlisted module, and the message says
+# future versions will block them outright. Registering here clears the
+# warning today and prevents a future-version footgun. Each tuple is
+# (module, classname) — matches the format the warning prints.
+_AGENTS_STATE_TYPES = [
+    FleetState,
+    TriageDecision,
+    RejectionSignal,
+    ApprovalRequest,
+    ActivityLogEntry,
+]
 
 logger = logging.getLogger("agents")
 
@@ -69,7 +91,12 @@ async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]
             open=False,
         )
         await stack.enter_async_context(pool)
-        saver = AsyncPostgresSaver(conn=pool)  # type: ignore[arg-type]
+        saver = AsyncPostgresSaver(
+            conn=pool,  # type: ignore[arg-type]
+            serde=JsonPlusSerializer(
+                allowed_msgpack_modules=_AGENTS_STATE_TYPES,
+            ),
+        )
         await saver.setup()
         return saver
 
