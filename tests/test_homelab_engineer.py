@@ -43,7 +43,7 @@ def _fake_safe_finding() -> HomelabFinding:
             "statefulset/alertmanager-kube-prometheus-stack-alertmanager",
         ],
         references=[
-            "prom: container_memory_working_set_bytes{pod=~\"alertmanager-.*\"}",
+            'prom: container_memory_working_set_bytes{pod=~"alertmanager-.*"}',
             "kubernetes/apps/observability/kube-prometheus-stack/app/helmrelease.yaml",
         ],
         rollback=(

@@ -85,8 +85,6 @@ def test_grep_vault_memory_no_matches_returns_empty(temp_vault: Path) -> None:
         ("a" * 100, "a" * 40),  # max_len cap at 40
     ],
 )
-def test_slugify_via_write_finding(
-    temp_vault: Path, topic: str, expected_substring: str
-) -> None:
+def test_slugify_via_write_finding(temp_vault: Path, topic: str, expected_substring: str) -> None:
     result = write_finding("t-x", topic=topic, body="x")
     assert expected_substring in result.path.name

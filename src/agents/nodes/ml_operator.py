@@ -152,8 +152,7 @@ class MLFinding(BaseModel):
     references: list[str] = Field(
         default_factory=list,
         description=(
-            "Vault paths, memory entries, prom queries cited, model card "
-            "URLs, github issues."
+            "Vault paths, memory entries, prom queries cited, model card URLs, github issues."
         ),
     )
 
@@ -300,10 +299,9 @@ def _compose_approval_request(finding: MLFinding) -> ApprovalRequest:
     notification surfaces readable; the full draft lives in the vault and
     is linked from the broker message.
     """
-    summary = (
-        f"{finding.knob}: {finding.knob_change} "
-        f"(VRAM {finding.vram_delta_gib:+.2f} GiB)"
-    )[:200]
+    summary = (f"{finding.knob}: {finding.knob_change} (VRAM {finding.vram_delta_gib:+.2f} GiB)")[
+        :200
+    ]
     undo_path: str | None = None
     if finding.rollback.strip():
         # Embed the rollback as a description, not a callable target — the

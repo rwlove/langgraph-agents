@@ -66,9 +66,7 @@ def send(
 
     response = httpx.post(PUSHOVER_API_URL, data=payload, timeout=timeout_seconds)
     if response.status_code >= 400:
-        raise PushoverError(
-            f"Pushover send failed: {response.status_code} {response.text[:200]}"
-        )
+        raise PushoverError(f"Pushover send failed: {response.status_code} {response.text[:200]}")
 
     body = response.json() if response.text else {}
     return PushoverResult(

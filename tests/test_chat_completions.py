@@ -79,9 +79,7 @@ def test_chat_non_streaming_happy_path(temp_vault: Path) -> None:
     assert body["object"] == "chat.completion"
 
 
-def test_chat_503_when_persona_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_chat_503_when_persona_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """If the persona files haven't been synced to the vault yet, fail with a
     clear 503 rather than a generic 500."""
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path))  # empty vault

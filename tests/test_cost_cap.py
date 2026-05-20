@@ -83,17 +83,15 @@ def _reset_clients() -> None:
 
 def test_global_claude_spend_usd_sums_claude_group_only() -> None:
     """Helper sums only ``group="claude"`` samples; local-* is excluded."""
-    langgraph_cost_usd_total.labels(
-        agent="coder", group="claude", model="claude-opus-4-7"
-    ).inc(2.5)
-    langgraph_cost_usd_total.labels(
-        agent="reporter", group="claude", model="claude-opus-4-7"
-    ).inc(1.25)
+    langgraph_cost_usd_total.labels(agent="coder", group="claude", model="claude-opus-4-7").inc(2.5)
+    langgraph_cost_usd_total.labels(agent="reporter", group="claude", model="claude-opus-4-7").inc(
+        1.25
+    )
     # Local groups don't usually incur cost, but if a downstream emitter
     # ever stamped some, the helper must filter them out.
-    langgraph_cost_usd_total.labels(
-        agent="triager", group="local-p40", model="qwen2.5:7b"
-    ).inc(99.0)
+    langgraph_cost_usd_total.labels(agent="triager", group="local-p40", model="qwen2.5:7b").inc(
+        99.0
+    )
 
     assert global_claude_spend_usd() == pytest.approx(3.75)
 
@@ -121,13 +119,12 @@ def test_build_claude_raises_global_daily_at_threshold(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("COST_CAP_GLOBAL_DAILY_USD", "1.0")
 
-    langgraph_cost_usd_total.labels(
-        agent="coder", group="claude", model="claude-opus-4-7"
-    ).inc(1.0)
+    langgraph_cost_usd_total.labels(agent="coder", group="claude", model="claude-opus-4-7").inc(1.0)
 
-    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
-        CostCapHit
-    ) as excinfo:
+    with (
+        patch("agents.llm.service_healthy", return_value=False),
+        pytest.raises(CostCapHit) as excinfo,
+    ):
         llm("coder", escalate=True)
 
     assert excinfo.value.cap_kind == "global_daily"
@@ -143,13 +140,14 @@ def test_build_claude_raises_global_daily_above_threshold(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("COST_CAP_GLOBAL_DAILY_USD", "5.0")
 
-    langgraph_cost_usd_total.labels(
-        agent="reporter", group="claude", model="claude-opus-4-7"
-    ).inc(7.5)
+    langgraph_cost_usd_total.labels(agent="reporter", group="claude", model="claude-opus-4-7").inc(
+        7.5
+    )
 
-    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
-        CostCapHit
-    ) as excinfo:
+    with (
+        patch("agents.llm.service_healthy", return_value=False),
+        pytest.raises(CostCapHit) as excinfo,
+    ):
         llm("coder", escalate=True)
 
     assert excinfo.value.cap_kind == "global_daily"
@@ -169,9 +167,7 @@ def test_build_claude_returns_client_when_below_all_caps(
     monkeypatch.setenv("COST_CAP_PER_AGENT_DAILY_USD", "10.0")
     monkeypatch.setenv("COST_CAP_PER_TASK_USD", "5.0")
 
-    langgraph_cost_usd_total.labels(
-        agent="coder", group="claude", model="claude-opus-4-7"
-    ).inc(2.5)
+    langgraph_cost_usd_total.labels(agent="coder", group="claude", model="claude-opus-4-7").inc(2.5)
 
     with patch("agents.llm.service_healthy", return_value=False):
         model = llm("coder", escalate=True)
@@ -196,9 +192,10 @@ def test_per_agent_daily_cap_fires_when_agent_sum_exceeds(
 
     record_task_spend(task_id="task-A", agent="coder", cost_usd=2.0)
 
-    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
-        CostCapHit
-    ) as excinfo:
+    with (
+        patch("agents.llm.service_healthy", return_value=False),
+        pytest.raises(CostCapHit) as excinfo,
+    ):
         llm("coder", escalate=True)
 
     assert excinfo.value.cap_kind == "per_agent_daily"
@@ -245,9 +242,10 @@ def test_per_task_cap_fires_when_task_sum_exceeds(
     structlog.contextvars.bind_contextvars(task_id="task-XYZ")
     record_task_spend(task_id="task-XYZ", agent="coder", cost_usd=0.50)
 
-    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
-        CostCapHit
-    ) as excinfo:
+    with (
+        patch("agents.llm.service_healthy", return_value=False),
+        pytest.raises(CostCapHit) as excinfo,
+    ):
         llm("coder", escalate=True)
 
     assert excinfo.value.cap_kind == "per_task"
@@ -318,9 +316,10 @@ def test_per_task_cap_falls_back_to_global_and_per_agent_when_task_id_missing(
 
     record_task_spend(task_id="task-X", agent="coder", cost_usd=1.5)
 
-    with patch("agents.llm.service_healthy", return_value=False), pytest.raises(
-        CostCapHit
-    ) as excinfo:
+    with (
+        patch("agents.llm.service_healthy", return_value=False),
+        pytest.raises(CostCapHit) as excinfo,
+    ):
         llm("coder", escalate=True)
 
     assert excinfo.value.cap_kind == "per_agent_daily"

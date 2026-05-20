@@ -56,11 +56,15 @@ def supervisor_node(state: FleetState) -> dict[str, Any]:
     llm = _build_llm()
 
     rejection_summary = (
-        f"rejected_by={state.rejection.rejected_by}, "
-        f"reason={state.rejection.reason}, "
-        f"suggested_target={state.rejection.suggested_target}, "
-        f"cascade_count={state.cascade_count}"
-    ) if state.rejection else "(no rejection in state)"
+        (
+            f"rejected_by={state.rejection.rejected_by}, "
+            f"reason={state.rejection.reason}, "
+            f"suggested_target={state.rejection.suggested_target}, "
+            f"cascade_count={state.cascade_count}"
+        )
+        if state.rejection
+        else "(no rejection in state)"
+    )
 
     # Hard cap: if we've already cascaded twice, no more reroutes; escalate.
     if state.cascade_count >= _CASCADE_LIMIT:

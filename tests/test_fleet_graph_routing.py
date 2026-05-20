@@ -28,13 +28,16 @@ def _fake_triager_returning(target: str):
             reasoning="fake",
         )
         return {"triage": decision, "target_agent": target}
+
     return _node
 
 
 def _fake_specialist_output(name: str):
     """Fake the *_node function for any specialist; bypasses LLM."""
+
     def _node(state: FleetState) -> dict[str, Any]:
         return {"output": f"{name}: fake output"}
+
     return _node
 
 
@@ -73,9 +76,9 @@ def test_every_specialist_target_is_reachable(temp_vault: Path) -> None:
             final = graph.invoke(initial)
 
             assert final["target_agent"] == target, f"routing failed for {target}"
-            assert (
-                f"{target}: fake output" in final.get("output", "")
-            ), f"specialist node not reached for {target}; got {final.get('output')!r}"
+            assert f"{target}: fake output" in final.get("output", ""), (
+                f"specialist node not reached for {target}; got {final.get('output')!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +98,7 @@ def _fake_specialist_composing_approval(name: str):
     """Mimics a specialist that proposes a Class-C action — the canonical
     propose-then-execute shape. Identical to what smart-home-operator's
     `_compose_approval_request` builds for an HA write."""
+
     def _node(state: FleetState) -> dict[str, Any]:
         return {
             "output": f"{name}: composed approval_request",
@@ -107,6 +111,7 @@ def _fake_specialist_composing_approval(name: str):
             ),
             "target_agent": "errand-runner",
         }
+
     return _node
 
 
@@ -119,9 +124,7 @@ def test_specialist_with_approval_routes_to_errand_runner(temp_vault: Path) -> N
         NODES,
         {
             "triager": _fake_triager_returning("smart-home-operator"),
-            "smart-home-operator": _fake_specialist_composing_approval(
-                "smart-home-operator"
-            ),
+            "smart-home-operator": _fake_specialist_composing_approval("smart-home-operator"),
         },
     ):
         graph = build_fleet_graph(checkpointer=MemorySaver())

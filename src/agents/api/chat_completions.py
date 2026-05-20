@@ -167,9 +167,7 @@ async def _stream_response(
 
 
 @router.post("/chat/completions")
-async def chat_completions(
-    req: ChatCompletionRequest, _request: Request
-) -> Any:
+async def chat_completions(req: ChatCompletionRequest, _request: Request) -> Any:
     """Direct chat with a specific agent. Bypasses fleet orchestration.
 
     `model` must be one of the 15 agent IDs (see GET /v1/models). The
@@ -178,10 +176,7 @@ async def chat_completions(
     if req.model not in ALL_AGENT_IDS:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"unknown model '{req.model}'. Must be one of: "
-                f"{', '.join(ALL_AGENT_IDS)}"
-            ),
+            detail=(f"unknown model '{req.model}'. Must be one of: {', '.join(ALL_AGENT_IDS)}"),
         )
     if not req.messages:
         raise HTTPException(status_code=400, detail="messages cannot be empty")

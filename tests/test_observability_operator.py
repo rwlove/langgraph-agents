@@ -80,7 +80,7 @@ def _fake_safe_finding() -> ObservabilityFinding:
             "HolmesGPT generic-storage triage prompt",
         ],
         references=[
-            "prom query: longhorn_volume_state{volume=~\".+\"}",
+            'prom query: longhorn_volume_state{volume=~".+"}',
             "longhorn.io/docs alert tuning",
             "24h replay 2026-05-17 → 2026-05-18: typical rebuild <8m, peak 11m",
         ],

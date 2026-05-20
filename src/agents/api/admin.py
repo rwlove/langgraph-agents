@@ -33,11 +33,13 @@ async def list_agents() -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for agent_id in ALL_AGENT_IDS:
         identity = load_identity(agent_id)
-        out.append({
-            "id": agent_id,
-            "name": identity.name,
-            "emoji": identity.emoji,
-        })
+        out.append(
+            {
+                "id": agent_id,
+                "name": identity.name,
+                "emoji": identity.emoji,
+            }
+        )
     return out
 
 
@@ -68,35 +70,84 @@ async def list_tasks(request: Request) -> list[dict[str, Any]]:
             for i in t.interrupts
         ]
         values = snapshot.values or {}
-        out.append({
-            "task_id": thread_id,
-            "target_agent": values.get("target_agent"),
-            "awaiting_user_since": values.get("awaiting_user_since"),
-            "timeout_tier": values.get("timeout_tier"),
-            "interrupts": interrupts,
-        })
+        out.append(
+            {
+                "task_id": thread_id,
+                "target_agent": values.get("target_agent"),
+                "awaiting_user_since": values.get("awaiting_user_since"),
+                "timeout_tier": values.get("timeout_tier"),
+                "interrupts": interrupts,
+            }
+        )
     return out
 
 
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: str, request: Request) -> dict[str, Any]:
+    """Return a task's queue status + checkpointer state.
+
+    Phase 4.M2 — primary client is the daily-digest workflow polling
+    for completion after the synchronous /inbox flow was removed.
+
+    Response shape:
+
+    - `task_id`: the queue ULID
+    - `queue.status`: pending | claimed | done | (missing if checkpointer-only)
+    - `queue.attempts`: dequeue count
+    - `queue.result`: { output: str } when status=done
+    - `queue.last_error`: only set for failed entries (rare; most failures
+      go to task_dlq)
+    - `checkpointer.values` / `next` / `interrupts`: same as pre-cutover
+    """
+    out: dict[str, Any] = {"task_id": task_id}
+
+    pool = request.app.state.queue_pool
+    if pool is not None:
+        async with pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT status, attempts, result, last_error,
+                       claimed_at, claimed_by, ttl_expires_at
+                FROM task_queue WHERE id = %s
+                """,
+                (task_id,),
+            )
+            row = await cur.fetchone()
+        if row is not None:
+            status, attempts, result, last_error, claimed_at, claimed_by, ttl_expires_at = row
+            out["queue"] = {
+                "status": status,
+                "attempts": attempts,
+                "result": result,
+                "last_error": last_error,
+                "claimed_at": claimed_at.isoformat() if claimed_at else None,
+                "claimed_by": claimed_by,
+                "ttl_expires_at": ttl_expires_at.isoformat() if ttl_expires_at else None,
+            }
+
     graph = request.app.state.graph
-    if graph is None:
-        raise HTTPException(status_code=503, detail="graph not initialized")
+    if graph is not None:
+        config = {"configurable": {"thread_id": task_id}}
+        try:
+            snapshot = await graph.aget_state(config)
+            out["checkpointer"] = {
+                "values": snapshot.values,
+                "next": list(snapshot.next),
+                "interrupts": [
+                    {"id": i.id, "value": dict(i.value) if i.value else None}
+                    for t in snapshot.tasks
+                    for i in t.interrupts
+                ],
+            }
+        except Exception:
+            # Checkpointer may not have the task if the worker hasn't
+            # claimed it yet. Queue side covers the early-life case.
+            pass
 
-    config = {"configurable": {"thread_id": task_id}}
-    snapshot = await graph.aget_state(config)
+    if "queue" not in out and "checkpointer" not in out:
+        raise HTTPException(status_code=404, detail=f"task {task_id!r} not found")
 
-    return {
-        "task_id": task_id,
-        "values": snapshot.values,
-        "next": list(snapshot.next),
-        "interrupts": [
-            {"id": i.id, "value": dict(i.value) if i.value else None}
-            for t in snapshot.tasks
-            for i in t.interrupts
-        ],
-    }
+    return out
 
 
 class TimeoutTierBody(BaseModel):
@@ -104,9 +155,7 @@ class TimeoutTierBody(BaseModel):
 
 
 @router.post("/tasks/{task_id}/timeout-tier")
-async def set_timeout_tier(
-    task_id: str, body: TimeoutTierBody, request: Request
-) -> dict[str, Any]:
+async def set_timeout_tier(task_id: str, body: TimeoutTierBody, request: Request) -> dict[str, Any]:
     """Mark a paused workflow as cold (4h) or whatever tier n8n decides.
 
     The supervisor's per-agent override logic lives at the node level;
@@ -135,9 +184,7 @@ class CancelBody(BaseModel):
 
 
 @router.post("/tasks/{task_id}/cancel")
-async def cancel_task(
-    task_id: str, body: CancelBody, request: Request
-) -> dict[str, Any]:
+async def cancel_task(task_id: str, body: CancelBody, request: Request) -> dict[str, Any]:
     """Cancel a paused workflow.
 
     Sets a sentinel output field that any downstream reader interprets as
@@ -245,9 +292,7 @@ async def list_paused_threads(
     graph = request.app.state.graph
     if graph is None:
         raise HTTPException(status_code=503, detail="graph not initialized")
-    return await sweep_paused_threads(
-        graph, stale_after_seconds=stale_after_seconds
-    )
+    return await sweep_paused_threads(graph, stale_after_seconds=stale_after_seconds)
 
 
 # --- diagnostic: asyncio task graph ---
@@ -276,6 +321,7 @@ async def dump_asyncio_tasks() -> list[dict[str, Any]]:
     See `project_langgraph_reporter_post_node_hang` for the
     investigation this was added to support.
     """
+
     def _walk_await_chain(coro: Any) -> list[str]:
         """Walk a coroutine's cr_await chain to enumerate every suspended frame.
 
@@ -301,9 +347,7 @@ async def dump_asyncio_tasks() -> list[dict[str, Any]]:
 
             frame = getattr(cur, "cr_frame", None) or getattr(cur, "gi_frame", None)
             if frame is not None:
-                frames.append(
-                    f"{frame.f_code.co_filename}:{frame.f_lineno} {frame.f_code.co_name}"
-                )
+                frames.append(f"{frame.f_code.co_filename}:{frame.f_lineno} {frame.f_code.co_name}")
 
             # cr_await is the next-awaited coroutine on async def;
             # gi_yieldfrom is the equivalent on generators (used by

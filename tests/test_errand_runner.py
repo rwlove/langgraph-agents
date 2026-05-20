@@ -134,9 +134,7 @@ def test_class_c_without_undo_path_escalates(
     assert "missing undo_path" in result["output"]
 
 
-def test_executes_when_all_gates_pass(
-    temp_vault: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_executes_when_all_gates_pass(temp_vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: valid approval + valid signature + undo path + allowlist match."""
     monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
     get_settings.cache_clear()

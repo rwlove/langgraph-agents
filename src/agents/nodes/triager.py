@@ -20,9 +20,9 @@ _TRIAGER_TEMPERATURE = 0.1
 
 
 def _build_llm() -> Any:
-    return llm(
-        _TRIAGER_AGENT_ID, temperature=_TRIAGER_TEMPERATURE
-    ).with_structured_output(TriageDecision)
+    return llm(_TRIAGER_AGENT_ID, temperature=_TRIAGER_TEMPERATURE).with_structured_output(
+        TriageDecision
+    )
 
 
 def triager_node(state: FleetState) -> dict[str, Any]:

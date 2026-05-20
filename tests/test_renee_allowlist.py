@@ -17,26 +17,16 @@ from agents.api import inbox
 from agents.settings import get_settings
 
 
-class _FakeGraph:
-    """Minimal graph stand-in so /inbox doesn't try to run real nodes.
+class _FakeQueue:
+    """Stand-in for TaskQueue. enqueue returns a synthetic task_id."""
 
-    The Renee gate fires BEFORE graph invocation, so requests that get
-    past the gate just need a graph that returns a benign final state.
-    """
-
-    async def ainvoke(self, state: Any, config: Any) -> dict[str, Any]:
-        return {"output": "ok"}
-
-    async def aget_state(self, config: Any) -> Any:
-        class _S:
-            tasks: tuple = ()
-
-        return _S()
+    async def enqueue(self, envelope: dict[str, Any]) -> str:
+        return "fake-task-id-123"
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    app.state.graph = _FakeGraph()
+    app.state.task_queue = _FakeQueue()
     yield
 
 
@@ -64,8 +54,8 @@ def test_renee_with_allowed_intent_passes() -> None:
             "/inbox",
             json=_body(user="renee", requester="renee", intent="action"),
         )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "complete"
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "accepted"
 
 
 def test_renee_with_disallowed_intent_403() -> None:
@@ -100,7 +90,7 @@ def test_non_renee_requesters_skip_allowlist(requester: str | None) -> None:
         body["intent"] = "bug"  # would fail allowlist for renee
     with TestClient(app) as client:
         resp = client.post("/inbox", json=body)
-    assert resp.status_code == 200
+    assert resp.status_code == 202
 
 
 def test_envelope_default_no_requester_skips_check() -> None:
@@ -111,7 +101,7 @@ def test_envelope_default_no_requester_skips_check() -> None:
             "/inbox",
             json=_body(user="rob"),  # No requester, no intent — old caller.
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
 
 
 def test_allowlist_widening_via_settings(
@@ -127,4 +117,4 @@ def test_allowlist_widening_via_settings(
             "/inbox",
             json=_body(user="renee", requester="renee", intent="note"),
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 202

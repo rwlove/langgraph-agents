@@ -86,9 +86,7 @@ def _key_from_entity_name(name: str) -> str:
     return name.rsplit("/", 1)[-1]
 
 
-def _namespace_matches(
-    ns: tuple[str, ...], conds: tuple[MatchCondition, ...]
-) -> bool:
+def _namespace_matches(ns: tuple[str, ...], conds: tuple[MatchCondition, ...]) -> bool:
     """Apply ListNamespacesOp match conditions to a candidate namespace."""
     for cond in conds:
         if cond.match_type == "prefix":
@@ -240,9 +238,7 @@ class MCPMemoryStore(BaseStore):
                     )
                     row = await cur.fetchone()
                     if row is None:
-                        raise RuntimeError(
-                            f"upsert returned no row for entity '{ename}'"
-                        )
+                        raise RuntimeError(f"upsert returned no row for entity '{ename}'")
                     entity_id = row["id"]
 
                     if vector is None:
@@ -366,9 +362,7 @@ class MCPMemoryStore(BaseStore):
 
         return results
 
-    async def _alist_namespaces(
-        self, op: ListNamespacesOp
-    ) -> list[tuple[str, ...]]:
+    async def _alist_namespaces(self, op: ListNamespacesOp) -> list[tuple[str, ...]]:
         async with self._pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
