@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from agents.nodes.smart_home_operator import SmartHomeFinding, smart_home_operator_node
 from agents.personas import invalidate_cache, load_persona
-from agents.state import FleetState
+from agents.state import ApprovalRequest, FleetState
 
 
 def _fake_safe_finding() -> SmartHomeFinding:
@@ -193,3 +193,129 @@ def test_smart_home_operator_persona_loads(temp_vault: Path) -> None:
     persona = load_persona("smart-home-operator")
     assert persona
     assert "SOUL — smart-home-operator" in persona
+
+
+# ---------------------------------------------------------------------------
+# ApprovalRequest composition (demonstrates the propose-then-execute pattern
+# wired to errand-runner's interrupt() path from PR #36).
+# ---------------------------------------------------------------------------
+
+
+def _fake_action_finding() -> SmartHomeFinding:
+    """A class-C HA write that hands off to errand-runner — the canonical
+    propose-then-execute case (toggle a light, no safety device touched)."""
+    return SmartHomeFinding(
+        summary="User asked to turn off the porch light.",
+        failure_domain="Only porch light state; no automation depends on it being on.",
+        entities=["light.porch"],
+        devices=[],
+        diagnosis="Trivial service call — light.turn_off on light.porch.",
+        proposed_change=("Call light.turn_off on light.porch via ha-mcp.call_service."),
+        config_validated="N/A — not a config change.",
+        blast_radius=("Only light.porch. No automations reference its state directly."),
+        rollback="light.turn_on on light.porch (single inverse service call).",
+        recovery_path_touched=False,
+        sleep_hours_warning=False,
+        action_class="C",
+        handoff_target="errand-runner",
+        affected_resources=["light.porch"],
+        references=["ha_call_service"],
+    )
+
+
+def test_smart_home_operator_composes_approval_request_for_action(
+    temp_vault: Path,
+) -> None:
+    """A Class-C finding handed to errand-runner MUST populate
+    state.approval_request + target_agent so the fleet graph can route to
+    errand-runner and trigger the interrupt() path."""
+    state = FleetState(
+        task_id="t-sh-action-001",
+        source="zulip",
+        content="turn off the porch light",
+    )
+
+    class _FakeLLM:
+        def invoke(self, _messages):
+            return _fake_action_finding()
+
+    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()):
+        update = smart_home_operator_node(state)
+
+    assert update["target_agent"] == "errand-runner"
+    req = update["approval_request"]
+    assert isinstance(req, ApprovalRequest)
+    assert req.action_class == "C"
+    assert req.target == "ha-mcp.call_service"
+    assert req.proposed_by == "smart-home-operator"
+    # undo_path must be present for Class C — errand-runner refuses Class C
+    # without an undo and escalates to D.
+    assert req.undo_path is not None
+    assert "light.turn_on" in req.undo_path
+    assert "light.porch" in req.payload_summary
+    assert "light.turn_off" in req.payload_summary
+
+
+def test_smart_home_operator_skips_approval_for_question(temp_vault: Path) -> None:
+    """A Class-A (analysis-only) finding with handoff_target=user must NOT
+    set approval_request or target_agent — the existing question/research
+    path stays END-only."""
+    finding = SmartHomeFinding(
+        summary="Why didn't the porch light come on?",
+        failure_domain="Analysis only.",
+        diagnosis="Likely renamed entity_id; needs investigation.",
+        proposed_change="Investigate entity rename in ha_get_automation_traces.",
+        blast_radius="None — analysis only.",
+        rollback="N/A — no change proposed.",
+        action_class="A",
+        handoff_target="user",
+    )
+    state = FleetState(
+        task_id="t-sh-question-001",
+        source="zulip",
+        content="why didn't the porch light come on at dusk?",
+    )
+
+    class _FakeLLM:
+        def invoke(self, _messages):
+            return finding
+
+    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()):
+        update = smart_home_operator_node(state)
+
+    assert "approval_request" not in update
+    assert "target_agent" not in update
+
+
+def test_smart_home_operator_skips_approval_for_class_b_handoff(
+    temp_vault: Path,
+) -> None:
+    """A Class-B vault-draft handoff (handoff_target=errand-runner is
+    technically possible but the eight-clause gate keeps writes at C). If a
+    LLM emits B + errand-runner anyway, we still skip approval — errand-runner
+    isn't the broker for vault drafts."""
+    finding = SmartHomeFinding(
+        summary="Draft a new automation for the porch light.",
+        failure_domain="Draft only.",
+        diagnosis="No change yet.",
+        proposed_change="Write a draft automation in the vault.",
+        blast_radius="None — vault-local.",
+        rollback="Delete the draft.",
+        action_class="B",
+        handoff_target="errand-runner",
+    )
+    state = FleetState(
+        task_id="t-sh-draft-001",
+        source="text",
+        content="draft a porch automation",
+    )
+
+    class _FakeLLM:
+        def invoke(self, _messages):
+            return finding
+
+    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()):
+        update = smart_home_operator_node(state)
+
+    assert "approval_request" not in update
+    assert "target_agent" not in update

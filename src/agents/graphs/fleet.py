@@ -120,11 +120,25 @@ def _route_after_triage(state: FleetState) -> AgentId | str:
 def _route_after_specialist(state: FleetState) -> AgentId | str:
     """Conditional edge from a specialist that may have set a rejection.
 
-    If the specialist rejected, route to supervisor. Otherwise END (or, in
-    future phases, route to errand-runner if an approval flow was triggered).
+    Precedence (first match wins):
+      1. ``rejection`` set → supervisor (the supervisor re-routes or escalates).
+      2. ``approval_request`` set + ``target_agent == "errand-runner"`` →
+         errand-runner. This is the propose-then-execute path: the specialist
+         composed an ApprovalRequest, errand-runner pauses on ``interrupt()``,
+         the /approval HTTPRoute resumes with the user's verdict.
+      3. otherwise → END.
+
+    The errand-runner branch is what makes PR #36's interrupt path
+    reachable end-to-end. Without it, specialists that populated
+    ``approval_request`` would END before errand-runner ever ran.
     """
     if state.rejection is not None:
         return "supervisor"
+    if (
+        state.approval_request is not None
+        and state.target_agent == "errand-runner"
+    ):
+        return "errand-runner"
     return END
 
 
@@ -168,12 +182,21 @@ def build_fleet_graph(
     triage_route_map[END] = END
     builder.add_conditional_edges("triager", _route_after_triage, triage_route_map)
 
-    # Each specialist routes either to supervisor (on rejection) or END.
-    specialist_route_map: dict[Hashable, str] = {"supervisor": "supervisor", END: END}
+    # Each specialist routes to supervisor (rejection), errand-runner
+    # (approval composition), or END. errand-runner is excluded from this
+    # loop and wired directly to END below — re-applying the same router
+    # post-execute would re-trigger on its still-set approval_request and
+    # loop the node back into itself.
+    specialist_route_map: dict[Hashable, str] = {
+        "supervisor": "supervisor",
+        "errand-runner": "errand-runner",
+        END: END,
+    }
     for agent in ALL_AGENT_IDS:
-        if agent in ("triager", "supervisor"):
+        if agent in ("triager", "supervisor", "errand-runner"):
             continue
         builder.add_conditional_edges(agent, _route_after_specialist, specialist_route_map)
+    builder.add_edge("errand-runner", END)
 
     # Supervisor either reroutes to a specialist or escalates to END.
     supervisor_route_map: dict[Hashable, str] = {
