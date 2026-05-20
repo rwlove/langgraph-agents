@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from langgraph.checkpoint.memory import MemorySaver
 
 from agents.api import admin
 from agents.state import ALL_AGENT_IDS
@@ -97,6 +100,140 @@ def test_costs_today_aggregates_from_log(temp_vault: Path) -> None:
         body = r.json()
         assert body["spent_usd"] == 4.0
         assert body["per_agent"] == {"coder": 2.0, "homelab-engineer": 2.0}
+
+
+def test_paused_threads_503_when_graph_missing(temp_vault: Path) -> None:
+    """No graph on app.state → 503, not a confusing 500."""
+    app = _make_app_with_graph(temp_vault)
+    # graph stays None (set by _make_app_with_graph)
+    with TestClient(app) as client:
+        r = client.get("/admin/paused-threads")
+        assert r.status_code == 503
+
+
+def _empty_alist() -> AsyncIterator[Any]:
+    async def _gen() -> AsyncIterator[Any]:
+        if False:  # never yields
+            yield None
+    return _gen()
+
+
+def test_paused_threads_returns_empty_list_when_no_pauses(
+    temp_vault: Path,
+) -> None:
+    """No checkpoints → 200 + []. The happy path for a fresh cluster."""
+    fake_graph = MagicMock()
+    fake_checkpointer = MagicMock()
+    fake_checkpointer.alist = MagicMock(side_effect=lambda *a, **kw: _empty_alist())
+    fake_graph.checkpointer = fake_checkpointer
+
+    app = _make_app_with_graph(temp_vault)
+    app.state.graph = fake_graph
+    with TestClient(app) as client:
+        r = client.get("/admin/paused-threads")
+        assert r.status_code == 200
+        assert r.json() == []
+
+
+def test_paused_threads_skips_when_memory_saver(temp_vault: Path) -> None:
+    """MemorySaver dev path returns [] (sweep is a no-op)."""
+    fake_graph = MagicMock()
+    fake_graph.checkpointer = MemorySaver()
+
+    app = _make_app_with_graph(temp_vault)
+    app.state.graph = fake_graph
+    with TestClient(app) as client:
+        r = client.get("/admin/paused-threads")
+        assert r.status_code == 200
+        assert r.json() == []
+
+
+def test_paused_threads_reports_paused_with_staleness(temp_vault: Path) -> None:
+    """A thread paused 1h ago + a thread paused 10s ago — staleness flags correctly."""
+    # CheckpointTuple-shaped objects (we only need `.config`).
+    cp_stale = MagicMock()
+    cp_stale.config = {"configurable": {"thread_id": "stale-1"}}
+    cp_fresh = MagicMock()
+    cp_fresh.config = {"configurable": {"thread_id": "fresh-1"}}
+
+    async def _alist(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+        for cp in (cp_stale, cp_fresh):
+            yield cp
+
+    # Each thread resolves to a snapshot with one interrupt + a different created_at.
+    interrupt = MagicMock()
+    interrupt.id = "ix-1"
+    interrupt.value = {"reason": "test"}
+    task = MagicMock()
+    task.interrupts = [interrupt]
+
+    now = datetime.now(UTC)
+    stale_snap = MagicMock()
+    stale_snap.tasks = [task]
+    stale_snap.created_at = (now - timedelta(hours=1)).isoformat()
+    stale_snap.next = ("supervisor",)
+
+    fresh_snap = MagicMock()
+    fresh_snap.tasks = [task]
+    fresh_snap.created_at = (now - timedelta(seconds=10)).isoformat()
+    fresh_snap.next = ("supervisor",)
+
+    async def _aget_state(config: dict[str, Any]) -> Any:
+        tid = config["configurable"]["thread_id"]
+        return stale_snap if tid == "stale-1" else fresh_snap
+
+    fake_graph = MagicMock()
+    fake_graph.checkpointer = MagicMock()
+    fake_graph.checkpointer.alist = MagicMock(side_effect=lambda *a, **kw: _alist())
+    fake_graph.aget_state = AsyncMock(side_effect=_aget_state)
+
+    app = _make_app_with_graph(temp_vault)
+    app.state.graph = fake_graph
+    with TestClient(app) as client:
+        r = client.get("/admin/paused-threads")
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body) == 2
+
+        by_id = {row["thread_id"]: row for row in body}
+        assert by_id["stale-1"]["is_stale"] is True
+        assert by_id["stale-1"]["paused_for_seconds"] > 60
+        assert by_id["stale-1"]["interrupts"][0]["id"] == "ix-1"
+        assert by_id["stale-1"]["next"] == ["supervisor"]
+
+        assert by_id["fresh-1"]["is_stale"] is False
+        assert by_id["fresh-1"]["paused_for_seconds"] < 60
+
+
+def test_paused_threads_skips_threads_without_interrupts(
+    temp_vault: Path,
+) -> None:
+    """Non-paused checkpoints in the same alist must not leak into the output."""
+    cp = MagicMock()
+    cp.config = {"configurable": {"thread_id": "running-1"}}
+
+    async def _alist(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+        yield cp
+
+    # A snapshot whose tasks have no interrupts == thread is running normally.
+    task = MagicMock()
+    task.interrupts = []
+    snap = MagicMock()
+    snap.tasks = [task]
+    snap.created_at = datetime.now(UTC).isoformat()
+    snap.next = ()
+
+    fake_graph = MagicMock()
+    fake_graph.checkpointer = MagicMock()
+    fake_graph.checkpointer.alist = MagicMock(side_effect=lambda *a, **kw: _alist())
+    fake_graph.aget_state = AsyncMock(return_value=snap)
+
+    app = _make_app_with_graph(temp_vault)
+    app.state.graph = fake_graph
+    with TestClient(app) as client:
+        r = client.get("/admin/paused-threads")
+        assert r.status_code == 200
+        assert r.json() == []
 
 
 def test_costs_today_tolerates_malformed_log(temp_vault: Path) -> None:
