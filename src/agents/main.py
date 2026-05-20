@@ -230,27 +230,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
         # P3.7: diagnostic sweep — log any threads paused at interrupt()
-        # that survived the pod restart. Read-only; auto-resume is a
-        # follow-up once P1.2 wires interrupt() into class-C/D nodes.
-        # Never fails startup (sweep helper swallows its own errors).
+        # that survived the pod restart. Default OFF.
         #
-        # Run as a fire-and-forget background task so even a slow walk
-        # over a long checkpoint history can't block uvicorn's
-        # "Application startup complete" — that hold previously gated
-        # the /healthz probe and tripped Flux's helm-upgrade timeout.
-        # The sweep itself is bounded by DEFAULT_STARTUP_SWEEP_LIMIT.
-        sweep_task = asyncio.create_task(
-            startup_log_paused_threads(app.state.graph)
-        )
-        # Keep a reference so the task isn't GC'd; this is a known
-        # asyncio footgun for short-lived fire-and-forget tasks.
-        app.state.startup_sweep_task = sweep_task
+        # The sweep walks the langgraph_checkpoints table and calls
+        # `aget_state` per unique thread. On an instance with days of
+        # history this STARVES the Postgres connection pool — even as
+        # a background task, the per-thread connection it holds blocks
+        # /inbox from getting a checkpoint write through. (Verified
+        # empirically against v0.2.22: /admin/asyncio-tasks showed
+        # sweep stuck at `aget_tuple → __aenter__` while inbox
+        # requests timed out waiting for a pool slot.)
+        #
+        # Opt in via `STARTUP_SWEEP_ENABLED=true` once class-C/D nodes
+        # routinely produce paused threads worth resuming. The
+        # on-demand `/admin/paused-threads` endpoint runs the sweep
+        # regardless of this flag.
+        sweep_task: asyncio.Task[None] | None = None
+        if settings.startup_sweep_enabled:
+            sweep_task = asyncio.create_task(
+                startup_log_paused_threads(app.state.graph)
+            )
+            app.state.startup_sweep_task = sweep_task
+        else:
+            logger.info(
+                "startup paused-threads sweep disabled "
+                "(set STARTUP_SWEEP_ENABLED=true to enable)"
+            )
 
         yield
         logger.info("shutting down")
-        # Cancel the sweep if it's still running on shutdown — it's
-        # diagnostic, not load-bearing, so we don't wait for it.
-        if not sweep_task.done():
+        if sweep_task is not None and not sweep_task.done():
             sweep_task.cancel()
         flush_langfuse()
 

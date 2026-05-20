@@ -190,6 +190,18 @@ class Settings(BaseSettings):
     cost_cap_per_agent_daily_usd: float = 10.0
     cost_cap_global_daily_usd: float = 30.0
 
+    # --- startup sweep ---
+    # P3.7's startup sweep walks the langgraph_checkpoints table to log
+    # stale paused threads. Default OFF because (a) no node calls
+    # `interrupt()` outside of errand-runner today so there's nothing
+    # to sweep for, and (b) on an instance with days of checkpoint
+    # history the walk starves the Postgres connection pool — /inbox
+    # blocks waiting for a connection. Flip to True per-deployment via
+    # env once class-C/D nodes routinely pause AND the operator wants
+    # the startup diagnostic. The on-demand `/admin/paused-threads`
+    # endpoint runs the sweep regardless.
+    startup_sweep_enabled: bool = Field(default=False)
+
     # --- runtime ---
     log_level: str = "INFO"
     user_timezone: str = "America/New_York"
