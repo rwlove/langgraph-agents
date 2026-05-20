@@ -1,6 +1,6 @@
 [project]
 name = "langgraph-agents"
-version = "0.2.15"
+version = "0.2.16"
 description = "Multi-agent fleet for Rob's homelab — LangGraph runtime over ollama + Claude API, integrates with Zulip/Pushover/n8n/MCP gateway."
 readme = "README.md"
 requires-python = ">=3.12"

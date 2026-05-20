@@ -84,26 +84,36 @@ async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]
             kwargs={
                 "autocommit": True,
                 "prepare_threshold": 0,
-                # TCP keepalives — kernel-level dead-conn detection.
-                # The pool's `check=` (SELECT 1) handles HARD closes
+                # Belt + suspenders for silently-half-open TCP. The
+                # pool's `check=` (SELECT 1) handles HARD closes
                 # (server-side pg_terminate_backend) cleanly: postgres
                 # sends a close-conn message, psycopg raises, the pool
-                # discards. But SILENT half-opens (Cilium conntrack
-                # expiry between cluster pods, NAT idle drops) don't
-                # send anything — the socket stays kernel-ESTABLISHED
-                # while being functionally dead. SELECT 1 on that fd
-                # blocks forever waiting for a response that never
-                # comes, and `check=` parks with it. The cluster
-                # exhibits exactly this: after ~2min idle between
-                # /inbox requests, the next aget_tuple hangs forever.
-                # Keepalives make the kernel probe every 10s after
-                # 30s idle, up to 3 times — dead conns fail within
-                # ~60s with ECONNRESET/ENOTCONN, the pool catches and
-                # replaces. See `project_langgraph_reporter_post_node_hang`.
+                # discards. SILENT half-opens (Cilium conntrack expiry
+                # between cluster pods, NAT idle drops) don't send
+                # anything — the socket stays kernel-ESTABLISHED on
+                # both sides while being functionally dead. SELECT 1
+                # on that fd writes bytes that vanish; the recv parks
+                # forever waiting for an ACK that never comes; `check=`
+                # parks with it. The cluster exhibits exactly this
+                # after ~2min idle between /inbox requests — keepalives
+                # alone aren't enough because they fire only after
+                # `keepalives_idle` seconds of true idle, and SELECT 1
+                # mid-flight isn't idle.
+                #
+                # `tcp_user_timeout` (Linux, ms) is the right primitive:
+                # it tells the kernel to give up on a connection if
+                # outgoing data has been unacknowledged for this long
+                # — independent of keepalive cadence. With 15s, a dead
+                # conn's SELECT 1 raises within 15s instead of hanging
+                # forever. Keepalives stay on as defense-in-depth for
+                # detecting dead conns during long-actually-idle windows
+                # (e.g. between checkpoints during a slow LLM call).
+                # See `project_langgraph_reporter_post_node_hang`.
                 "keepalives": 1,
                 "keepalives_idle": 30,
                 "keepalives_interval": 10,
                 "keepalives_count": 3,
+                "tcp_user_timeout": 15000,
             },
             check=AsyncConnectionPool.check_connection,
             open=False,
