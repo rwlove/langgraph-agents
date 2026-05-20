@@ -1,0 +1,49 @@
+# docker-compose for the checkpoint-hang repro harness.
+#
+# Stands up a Postgres 17 instance with the same kernel-level TCP settings
+# the cluster relies on (tcp_user_timeout + keepalives are CLIENT-side
+# kwargs on the psycopg pool, but having a real postgres on the other end
+# is the part that's hard to fake in a unit test). Postgres config is
+# vanilla — the bug is in the langgraph-checkpoint-postgres ↔ psycopg-pool
+# interaction, not in postgres tuning.
+#
+# Run with:
+#   docker compose -f tests/integration/docker-compose.yml up -d
+#   docker compose -f tests/integration/docker-compose.yml down -v
+#
+# The repro harness (repro_checkpoint_hang.py) connects via
+# POSTGRES_TEST_URL=postgresql://repro:repro@localhost:55432/checkpoints
+# — port 55432 is deliberately offset to avoid clashing with a laptop's
+# local 5432 install.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: langgraph-checkpoint-repro-pg
+    environment:
+      POSTGRES_USER: repro
+      POSTGRES_PASSWORD: repro
+      POSTGRES_DB: checkpoints
+      # Postgres logs every statement >0ms when DEBUG; useful when chasing
+      # the moment the pool stops handing connections back. Default is
+      # silent. Override at compose-up time:
+      #   POSTGRES_LOG_STATEMENT=all docker compose up
+      POSTGRES_LOG_STATEMENT: ${POSTGRES_LOG_STATEMENT:-none}
+    command:
+      - "postgres"
+      - "-c"
+      - "log_statement=${POSTGRES_LOG_STATEMENT:-none}"
+      - "-c"
+      - "log_min_duration_statement=0"
+      # max_connections=100 is the postgres default. The repro pool uses
+      # max_size=10 so we're nowhere near the server-side ceiling — if
+      # the harness sees pool exhaustion, it's pool-side, not server-side.
+      - "-c"
+      - "max_connections=100"
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U repro -d checkpoints"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
