@@ -1,28 +1,63 @@
 # langgraph-agents
 
-LangGraph-based multi-agent fleet for Rob's homelab. Replaces the kubeclaw/OpenClaw direction with a Python service that runs in the k8s cluster.
+LangGraph-based multi-agent fleet for Rob's homelab. Replaces the kubeclaw / OpenClaw direction with a Python service that runs in the k8s cluster.
 
 Design rationale + 10 locked decisions: see `project_langgraph_redesign` in claude vault.
 
 ## What's in here
 
-17 agents as graph nodes:
+17 agents as graph nodes — one Pydantic-typed `AgentId` Literal in `state.py` is the single source of truth.
 
-| Generalists | Specialists |
+| Generalists (9) | Specialists (8) |
 |---|---|
 | triager · reporter · note-maker · researcher · coder · errand-runner · supervisor · reviewer · doc-writer | homelab-engineer · network-operator · storage-operator · smart-home-operator · ml-operator · observability-operator · health-tracker · property-coordinator |
 
-Personas live in the Obsidian vault at `~/vaults/claude/agents/workspaces/<agent>/{SOUL,IDENTITY,AGENTS,USER}.md` — the runtime loads them at startup.
+Personas live in the Obsidian vault at `~/vaults/claude/agents/workspaces/<agent>/{SOUL,IDENTITY,AGENTS,USER}.md` — the runtime loads them at startup from the mounted vault PVC.
+
+Adding an agent touches **five places**. See `.agents/instructions/persona.md` ("Practical consequences").
+
+## Graph topology
+
+```
+                       ┌─────────┐
+START ──▶ triager ──▶ (1 of 12)  ──▶ END
+                       │   │   │
+                       │ rejection
+                       │   │   │
+                       ▼   ▼   ▼
+                     supervisor ──▶ reroute or END (escalation)
+```
+
+Cascade depth is capped at 2 by the supervisor (`FleetState.cascade_count`). Each node either ENDs the run, sets `rejection` to bounce to supervisor, or — for class-C/D actions — returns an `ApprovalRequest` and pauses via `interrupt()` until the `/approval` endpoint resumes the workflow.
 
 ## HTTP surface
 
 | Endpoint | Used by | Purpose |
 |---|---|---|
-| `POST /v1/chat/completions` | OpenWebUI | OpenAI-compatible chat with one agent (model name = agent id) |
-| `POST /inbox` | n8n inbox webhook | Full fleet orchestration: triage → specialist → approval → execute |
-| `POST /approval` | n8n approval-broker | Resume a paused workflow on Zulip reaction (👍 / 👎 / ⏸️) |
-| `GET /admin/tasks` | ops | In-flight tasks + checkpoints |
-| `GET /healthz`, `/readyz` | k8s | Liveness + readiness |
+| `POST /v1/chat/completions` | OpenWebUI | OpenAI-compatible direct chat with one agent (model name = agent id). Bypasses fleet orchestration; still writes activity-log + emits Prom metrics. |
+| `GET /v1/models` | OpenWebUI | Model picker list — one entry per agent id. |
+| `POST /inbox` | Windmill `zulip-triager-webhook` (also test/voice/HolmesGPT sources) | Full fleet orchestration: triage → specialist → optional approval → execute → optional reply. |
+| `POST /approval` | ntfy phone action buttons → `langgraph.${SECRET_DOMAIN}/approval` via cloudflared | Resume a paused workflow on a user verdict (approve / reject / defer). HMAC-token auth. |
+| `GET /admin/tasks` | ops | In-flight tasks + checkpoint snapshots. |
+| `GET /admin/asyncio-tasks` | ops | Hung-coroutine diagnostics. |
+| `GET /healthz`, `/readyz` | k8s | Liveness + readiness. |
+| `GET /metrics` | Prometheus ServiceMonitor | Per-agent counts / tokens / cost / duration. |
+
+## Hardware routing
+
+The `agents.llm.llm(agent_id)` factory chooses the model per-agent:
+
+| Group | Endpoint | Model | Used by |
+|---|---|---|---|
+| `local-p40` | `ollama.ai.svc.cluster.local:11434` | `qwen2.5:7b` | triager, note-maker, errand-runner, property-coordinator, health-tracker, doc-writer |
+| `local-spark` | `ollama-spark.ai.svc.cluster.local:11434` | `qwen2.5:32b` | reporter, researcher, supervisor, coder, reviewer, + all 5 operator specialists |
+| `claude` | Anthropic API | `settings.claude_model` | None by default; opt-in per-call via `escalate=True` or when both local groups are unhealthy AND `degraded_mode_escalation_enabled=True` |
+
+Hard constraints:
+- **`health-tracker` never escalates to Claude**, regardless of the `escalate=` argument — health data stays local.
+- A Spark-down request degrades to P40 (qwen2.5:7b instead of 32b) with the `effective_group` Prom label reflecting what actually served the request. If both local groups are down, the request raises `LocalOllamaUnavailable` or escalates to Claude per the flag above.
+
+For the full routing matrix + degraded-path semantics see `.agents/instructions/hardware-routing.md`.
 
 ## Local development
 
@@ -35,7 +70,10 @@ uv run pytest
 
 # run the service against local ollama
 export OLLAMA_BASE_URL=http://localhost:11434/v1
+export OLLAMA_P40_URL=http://localhost:11434
+export OLLAMA_SPARK_URL=http://localhost:11434
 export POSTGRES_URL=postgresql://localhost:5432/langgraph_checkpoints
+export MEMORY_POSTGRES_URL=postgresql://localhost:5432/langgraph_memory
 export VAULT_ROOT=$HOME/vaults/claude
 uv run uvicorn agents.main:app --reload --port 8765
 
@@ -53,23 +91,42 @@ curl -X POST http://localhost:8765/inbox \
 ## Architecture
 
 ```
-Vault (laptop) ──rsync──▶ sync-receiver pod ──▶ vault PVC (RWX)
-                                                       │ RO mount
+Laptop ────rsync────▶ sync-receiver pod ────▶ vault PVC (RWX, RO mount in app)
+                                                       │
                                                        ▼
-n8n /inbox ────▶ langgraph-agents ──HTTP──▶ mcp-gateway (14 servers)
-                       │
-              Postgres │  checkpoints + pgvector memory
-                       │
-              Langfuse │  per-task traces + cost
-                       │
-                 Zulip │  agent posts + approval reactions
-                       │
-              Pushover │  Tier 1 escalation
+Zulip DM to Triager 📥 ────▶ Windmill `zulip-triager-webhook`
+                                       │ POST /inbox
+                                       ▼
+                            ┌──────────────────────┐
+                            │  langgraph-agents    │ ──HTTP──▶ mcp-gateway (Istio mTLS)
+                            │  (FastAPI + LangGraph)│            └─▶ 14 MCP servers
+                            │                      │
+                            │  ▲ /approval (resume) │ ◀──── ntfy action buttons (HMAC)
+                            │  │                   │
+                            │  ▼ checkpoints       │
+                            └──────────┬───────────┘
+                                       │
+                            ┌──────────┴──────────────────┐
+                            │                             │
+                  postgres-langgraph-checkpoints  postgres-langgraph-memory
+                            │                             │
+                  (AsyncPostgresSaver)         (MCPMemoryStore — vchordrq HNSW)
+                            │
+                            ▼
+                  ollama (P40) + ollama-spark (GB10)
+                            +
+                  Anthropic API (optional escalation)
+
+Side effects:
+  - Zulip DM reply (triager-bot identity) when source=zulip
+  - ntfy approval push when class-C/D action is composed
+  - structlog JSON → stdout → Vector → Loki
+  - Prom metrics → /metrics → ServiceMonitor
 ```
 
 ## Cluster deployment
 
-Manifests live in [home-ops] under `kubernetes/apps/ai/langgraph-agents/`. The container image is built by `.github/workflows/build.yaml` and published to `ghcr.io/<owner>/langgraph-agents`.
+Manifests live in [home-ops] under `kubernetes/apps/ai/langgraph-agents/`. The container image is built by `.github/workflows/build.yaml` and published to `ghcr.io/<owner>/langgraph-agents` with both `<semver>` and `v<semver>` tags.
 
 [home-ops]: https://github.com/rwlove/home-ops
 
@@ -77,14 +134,22 @@ Manifests live in [home-ops] under `kubernetes/apps/ai/langgraph-agents/`. The c
 
 ```
 src/agents/
-├── graphs/         # LangGraph graph definitions (fleet, approval, rejection, awaiting)
-├── nodes/          # one module per agent
-├── tools/          # mcp gateway client, skill loader, vault helpers
-├── api/            # FastAPI routes
-├── state.py        # GraphState Pydantic schema (typed routing targets)
-├── personas.py     # vault-file loader → composed system prompts
-├── memory.py       # pgvector retrieval helpers
-├── checkpointer.py # Postgres checkpointer wiring
-├── tracing.py      # Langfuse integration
-└── settings.py     # env config
+├── api/             # FastAPI route handlers (/inbox, /approval, /admin, /v1/*)
+├── graphs/          # LangGraph graph definitions (fleet, approval)
+├── nodes/           # one module per agent (17 nodes)
+├── tools/           # mcp gateway client, activity_log writer, zulip DM, skill loader
+├── state.py         # FleetState Pydantic schema (typed AgentId Literal)
+├── personas.py      # vault-file loader → composed system prompts
+├── llm.py           # per-agent LLM factory (P40 / Spark / Claude routing)
+├── memory_store.py  # MCPMemoryStore — long-term cross-agent KG over postgres-langgraph-memory
+├── observability.py # Prom metrics + structlog config + LangGraph metrics callback
+├── health.py        # HTTP health check used by the LLM factory's degraded routing
+├── main.py          # FastAPI app + lifespan (builds checkpointer + store + graph)
+└── settings.py      # pydantic-settings env config
 ```
+
+## Observability
+
+- **Prometheus** — four metrics (`langgraph_calls_total`, `langgraph_tokens_total`, `langgraph_cost_usd_total`, `langgraph_llm_duration_seconds`) labeled by `agent`, `group`, `model`, `outcome`, `trigger`. Scraped by the `langgraph-agents` ServiceMonitor.
+- **Loki** — structlog JSON to stdout, picked up by Vector. Per-task field is `task_id`.
+- **Langfuse** — per-task trace UI is planned (the `langfuse` dep is in `pyproject.toml`); SDK wiring + cluster deployment land in a follow-up phase.
