@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from agents.nodes.storage_operator import StorageFinding, storage_operator_node
 from agents.personas import invalidate_cache, load_persona
-from agents.state import FleetState
+from agents.state import ApprovalRequest, FleetState
 
 
 def _fake_safe_finding() -> StorageFinding:
@@ -232,3 +232,62 @@ def test_storage_operator_persona_loads(temp_vault: Path) -> None:
     persona = load_persona("storage-operator")
     assert persona
     assert "SOUL — storage-operator" in persona
+
+
+# ---------------------------------------------------------------------------
+# ApprovalRequest composition (mirrors PR #39 smart-home-operator wiring).
+# ---------------------------------------------------------------------------
+
+
+def test_storage_operator_composes_approval_request_for_action(
+    temp_vault: Path,
+) -> None:
+    """A Class-C storage finding handed to errand-runner MUST populate
+    state.approval_request + target_agent so the fleet graph can route to
+    errand-runner and trigger the interrupt() path."""
+    state = FleetState(
+        task_id="t-stg-action-001",
+        source="zulip",
+        content="add a 50Gi pvc for paperless-ngx on ceph-block",
+    )
+
+    class _FakeLLM:
+        def invoke(self, _messages):
+            return _fake_safe_finding()
+
+    with patch("agents.nodes.storage_operator._build_llm", return_value=_FakeLLM()):
+        update = storage_operator_node(state)
+
+    assert update["target_agent"] == "errand-runner"
+    req = update["approval_request"]
+    assert isinstance(req, ApprovalRequest)
+    assert req.action_class == "C"
+    assert req.target == "kubectl-mcp.kubectl_apply"
+    assert req.proposed_by == "storage-operator"
+    # undo_path must be present for Class C — errand-runner refuses Class C
+    # without an undo and escalates to D.
+    assert req.undo_path is not None
+    assert "kubectl delete pvc" in req.undo_path
+    # payload_summary should describe the proposed change.
+    assert "PVC" in req.payload_summary or "paperless" in req.payload_summary
+
+
+def test_storage_operator_skips_approval_for_question(temp_vault: Path) -> None:
+    """A Class-A (recovery-path, analysis-only) finding with handoff_target=user
+    must NOT set approval_request or target_agent — the existing question/
+    research path stays END-only."""
+    state = FleetState(
+        task_id="t-stg-question-001",
+        source="text",
+        content="please reduce ha barman retention from 7d to 3d",
+    )
+
+    class _FakeLLM:
+        def invoke(self, _messages):
+            return _fake_recovery_path_finding()
+
+    with patch("agents.nodes.storage_operator._build_llm", return_value=_FakeLLM()):
+        update = storage_operator_node(state)
+
+    assert "approval_request" not in update
+    assert "target_agent" not in update
