@@ -54,8 +54,8 @@ The `agents.llm.llm(agent_id)` factory is the single source of truth for which m
 - **Routing an agent off Spark** — don't fall back to a third group; either P40 or Claude, no in-between. P40's qwen2.5:7b is "degraded but serving"; anything bigger doesn't fit on P40.
 - **Health-tracker exception is permanent** — never weaken the `health-tracker` local-only branch in `llm.py` without an explicit user instruction.
 
-## Side-effect: chat_completions has its own routing today
+## chat_completions delegates to the factory
 
-`api/chat_completions.py` (the OpenWebUI surface) uses a hardcoded `_PER_AGENT_MODEL` dict and sends every request to `settings.ollama_base_url` (NOT the per-agent Spark/P40 endpoint). It bypasses `agents.llm.llm()` entirely.
+`api/chat_completions.py` (the OpenWebUI surface) calls `agents.llm.llm(agent_id, trigger="openwebui")` for every request. Same per-agent Spark/P40 routing as the /inbox + scheduled-graph paths; Spark-class agents (reporter, researcher, supervisor, coder, reviewer, the four operator agents) get qwen2.5:32b on the Spark endpoint instead of qwen2.5:7b on P40.
 
-Consequence: OpenWebUI Spark agents currently run on P40 with the 7b/32b choice made locally by `_PER_AGENT_MODEL`, not by `AGENT_GROUP`. The metrics callback was wired in `chat_completions._make_llm()` (PR #26) so observability is intact, but the routing is duplicated and will drift. Folding `chat_completions._make_llm()` to call `agents.llm.llm(agent_id)` is a small refactor and is tracked as a follow-up — not done in this doc PR to keep scope clean.
+The `trigger="openwebui"` propagates to `LangGraphMetricsCallback`'s `trigger` label on `langgraph_calls_total` so Grafana panels filtering on that label keep working. The Langfuse callback also lands on OpenWebUI chats now (same factory attachment), so per-task traces show up alongside /inbox runs in the trace UI.

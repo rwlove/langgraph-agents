@@ -147,6 +147,7 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
     group_override: ModelGroup | None = None,
     escalate: bool = False,
     temperature: float = 0.2,
+    trigger: str = "",
 ) -> BaseChatModel:
     """Return a chat model for `agent_id`.
 
@@ -164,6 +165,13 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
       is wasted GPU time). If unhealthy AND degraded-mode-escalation is on,
       escalate to Claude. Else raise.
     - `claude` (explicit): requires ANTHROPIC_API_KEY; otherwise raises.
+
+    `trigger` propagates through to ``LangGraphMetricsCallback`` as the
+    `trigger` label on `langgraph_calls_total`. Default empty string means
+    "no trigger override" (matches the /inbox + scheduled-graph paths).
+    The OpenWebUI surface passes `trigger="openwebui"` so the dashboard panel
+    filtering on that label still works after this surface was folded onto
+    the factory.
     """
     settings = get_settings()
 
@@ -175,13 +183,17 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
     group: ModelGroup = group_override or AGENT_GROUP[agent_id]
 
     if escalate and settings.anthropic_api_key:
-        return _build_claude(settings, agent_id, "claude", temperature=temperature)
+        return _build_claude(
+            settings, agent_id, "claude", temperature=temperature, trigger=trigger
+        )
 
     if group == "claude":
         if not settings.anthropic_api_key:
             msg = f"agent {agent_id!r} requested Claude but ANTHROPIC_API_KEY is not set"
             raise RuntimeError(msg)
-        return _build_claude(settings, agent_id, "claude", temperature=temperature)
+        return _build_claude(
+            settings, agent_id, "claude", temperature=temperature, trigger=trigger
+        )
 
     if group == "local-spark":
         if service_healthy(settings.ollama_spark_url):
@@ -191,6 +203,7 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
                 agent_id=agent_id,
                 effective_group="local-spark",
                 temperature=temperature,
+                trigger=trigger,
             )
         # Spark unhealthy — degrade to P40 (quality loss, no escalation).
         # effective_group="local-p40" so the metric label reflects what's
@@ -202,9 +215,12 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
                 agent_id=agent_id,
                 effective_group="local-p40",
                 temperature=temperature,
+                trigger=trigger,
             )
         if settings.degraded_mode_escalation_enabled and settings.anthropic_api_key:
-            return _build_claude(settings, agent_id, "claude", temperature=temperature)
+            return _build_claude(
+                settings, agent_id, "claude", temperature=temperature, trigger=trigger
+            )
         raise LocalOllamaUnavailable(group, agent_id, failed_group="local-spark")
 
     # group == "local-p40"
@@ -215,9 +231,12 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
             agent_id=agent_id,
             effective_group="local-p40",
             temperature=temperature,
+            trigger=trigger,
         )
     if settings.degraded_mode_escalation_enabled and settings.anthropic_api_key:
-        return _build_claude(settings, agent_id, "claude", temperature=temperature)
+        return _build_claude(
+            settings, agent_id, "claude", temperature=temperature, trigger=trigger
+        )
     raise LocalOllamaUnavailable(group, agent_id, failed_group="local-p40")
 
 
@@ -228,6 +247,7 @@ def _build_ollama(
     agent_id: AgentId,
     effective_group: ModelGroup,
     temperature: float,
+    trigger: str = "",
 ) -> BaseChatModel:
     """Build a ChatOllama client with the metrics callback pre-attached.
 
@@ -240,6 +260,11 @@ def _build_ollama(
     arrives here with `effective_group="local-p40"` so the metric labels
     reflect reality.
 
+    `trigger` is propagated to the metrics callback's `trigger` label. Empty
+    string by default; the OpenWebUI surface passes "openwebui" so dashboard
+    panels filtering on that label keep working after the surface was folded
+    onto this factory.
+
     Callback is attached as an INTRINSIC model callback (the model's own
     `callbacks` field) — survives `with_structured_output()` chain wrapping.
     Verified empirically that `with_config(callbacks=[...])` does NOT survive
@@ -248,7 +273,9 @@ def _build_ollama(
     """
     base_url = base_url.removesuffix("/v1").rstrip("/")
     callbacks: list[BaseCallbackHandler] = [
-        LangGraphMetricsCallback(agent=agent_id, group=effective_group, model=model),
+        LangGraphMetricsCallback(
+            agent=agent_id, group=effective_group, model=model, trigger=trigger
+        ),
     ]
     lf = langfuse_callback_handler()
     if lf is not None:
@@ -267,6 +294,7 @@ def _build_claude(
     effective_group: ModelGroup,
     *,
     temperature: float,
+    trigger: str = "",
 ) -> BaseChatModel:
     # ChatAnthropic init: `model` is the alias for `model_name`. api_key must
     # be SecretStr; callers ensure non-None via the escalate-path checks in llm().
@@ -292,7 +320,10 @@ def _build_claude(
 
     callbacks: list[BaseCallbackHandler] = [
         LangGraphMetricsCallback(
-            agent=agent_id, group=effective_group, model=settings.claude_model
+            agent=agent_id,
+            group=effective_group,
+            model=settings.claude_model,
+            trigger=trigger,
         ),
     ]
     lf = langfuse_callback_handler()

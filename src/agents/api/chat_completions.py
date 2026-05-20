@@ -10,12 +10,13 @@ This surface deliberately bypasses the triager + approval flow — it's for
 ad-hoc direct chat with one agent. The full orchestration path is
 POST /inbox.
 
-The bypass is documented and accepted. To keep the audit trail and the
-Prom metrics complete across all entry surfaces, this module attaches the
-``LangGraphMetricsCallback`` as an intrinsic ``ChatOllama`` callback (not
-via ``with_config(callbacks=[...])`` — see ``observability.py`` for the
-documented LangChain footgun) and writes a Class-A entry to the calling
-agent's vault activity log on each invocation.
+The bypass is documented and accepted. The actual chat-model is built
+through the shared per-agent factory in ``agents.llm`` (same routing rules
+as /inbox + scheduled-graph paths), which attaches the Prom metrics
+callback and the Langfuse callback intrinsically. We pass
+``trigger="openwebui"`` so the dashboard panel filtering on that label
+keeps working. A Class-A entry is also written to the calling agent's
+vault activity log on each invocation for audit value.
 
 Streaming via SSE (Server-Sent Events) is supported. OpenWebUI uses it
 to show partial output as the LLM generates.
@@ -28,19 +29,20 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 
-from agents.observability import LangGraphMetricsCallback, langfuse_callback_handler
+from agents.llm import llm as build_llm
 from agents.personas import load_persona
-from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS, AgentId
 from agents.tools.activity_log import log_activity
+
+if TYPE_CHECKING:
+    from langchain_core.language_models.chat_models import BaseChatModel
 
 logger = logging.getLogger("agents.api.chat_completions")
 
@@ -85,27 +87,6 @@ async def list_models() -> dict[str, Any]:
 # ---- /v1/chat/completions ----
 
 
-_PER_AGENT_MODEL: dict[str, str] = {
-    "triager": "qwen2.5:7b",
-    "reporter": "qwen2.5:32b",
-    "note-maker": "qwen2.5:7b",
-    "researcher": "qwen2.5:32b",
-    "coder": "qwen2.5:7b",
-    "errand-runner": "qwen2.5:7b",
-    "supervisor": "qwen2.5:32b",
-    "reviewer": "qwen2.5:7b",
-    "homelab-engineer": "qwen2.5:7b",
-    "network-operator": "qwen2.5:7b",
-    "storage-operator": "qwen2.5:7b",
-    "smart-home-operator": "qwen2.5:7b",
-    "ml-operator": "qwen2.5:7b",
-    "observability-operator": "qwen2.5:7b",
-    "health-tracker": "qwen2.5:7b",  # local-only enforced via persona + no provider switch
-    "property-coordinator": "qwen2.5:7b",
-    "doc-writer": "qwen2.5:7b",  # fills gap from project_langgraph_specialist_5_places
-}
-
-
 def _to_lc_messages(messages: list[ChatMessage], persona: str) -> list[Any]:
     """Convert OpenAI-shape messages to LangChain message objects.
 
@@ -124,32 +105,29 @@ def _to_lc_messages(messages: list[ChatMessage], persona: str) -> list[Any]:
     return out
 
 
-def _make_llm(agent_id: AgentId, temperature: float | None) -> ChatOllama:
-    """Construct a ChatOllama with the per-agent model + metrics callback.
+def _make_llm(agent_id: AgentId, temperature: float | None) -> BaseChatModel:
+    """Build the chat model for a direct OpenWebUI request.
 
-    The metrics callback is wired as an *intrinsic* model callback (not via
-    ``with_config(callbacks=[...])``) — see the docstring on
-    ``LangGraphMetricsCallback`` for why that path is the only reliable one
-    once chains and structured-output wrappers come into play.
+    Delegates to ``agents.llm.llm(agent_id, ...)`` so this surface picks up
+    the same per-agent P40/Spark routing as /inbox + scheduled-graph paths.
+    Previously this constructed ``ChatOllama`` directly against
+    ``settings.ollama_base_url`` with a local per-agent model dict, which
+    silently routed every model (including the Spark-class agents like
+    reporter / supervisor / coder) to P40 with qwen2.5:7b.
+
+    The factory attaches both ``LangGraphMetricsCallback`` and the
+    Langfuse callback intrinsically — see ``observability.py`` for why
+    intrinsic-not-with_config is the only reliable path once chains and
+    structured-output wrappers come into play.
+
+    ``trigger="openwebui"`` is propagated to the metrics callback's
+    ``trigger`` label so the Grafana panel filtering on
+    ``trigger=openwebui`` keeps working after this refactor.
     """
-    settings = get_settings()
-    model_name = _PER_AGENT_MODEL.get(agent_id, "qwen2.5:7b")
-    callbacks: list[Any] = [
-        LangGraphMetricsCallback(
-            agent=agent_id,
-            group="local",
-            model=model_name,
-            trigger="openwebui",
-        ),
-    ]
-    lf = langfuse_callback_handler()
-    if lf is not None:
-        callbacks.append(lf)
-    return ChatOllama(
-        model=model_name,
-        base_url=settings.ollama_base_url.removesuffix("/v1"),
+    return build_llm(
+        agent_id,
         temperature=0.2 if temperature is None else temperature,
-        callbacks=callbacks,
+        trigger="openwebui",
     )
 
 
@@ -172,9 +150,14 @@ def _chat_completion_chunk(model: str, content: str, finish: str | None = None) 
 
 
 async def _stream_response(
-    model: str, llm: ChatOllama, lc_messages: list[Any]
+    model: str, llm: BaseChatModel, lc_messages: list[Any]
 ) -> AsyncIterator[str]:
-    """Stream tokens from ollama as OpenAI SSE chunks."""
+    """Stream tokens from the chat model as OpenAI SSE chunks.
+
+    ``BaseChatModel.astream`` is the LangChain interface common to both
+    ChatOllama and ChatAnthropic, so this works regardless of which
+    backend the factory routed to.
+    """
     async for chunk in llm.astream(lc_messages):
         text = getattr(chunk, "content", "") or ""
         if text:
