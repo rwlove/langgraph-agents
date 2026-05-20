@@ -81,12 +81,30 @@ async def _build_checkpointer(stack: AsyncExitStack) -> BaseCheckpointSaver[Any]
             conninfo=settings.postgres_url,
             min_size=1,
             max_size=10,
-            kwargs={"autocommit": True, "prepare_threshold": 0},
-            # `check` runs SELECT 1 before yielding a conn — a dead conn
-            # (silent conntrack expiry, server-side terminate, NAT idle
-            # drop) fails the check and gets replaced, instead of being
-            # handed out and parking the next aget_tuple. This is the
-            # behavior the v0.2.11 hang needed.
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                # TCP keepalives — kernel-level dead-conn detection.
+                # The pool's `check=` (SELECT 1) handles HARD closes
+                # (server-side pg_terminate_backend) cleanly: postgres
+                # sends a close-conn message, psycopg raises, the pool
+                # discards. But SILENT half-opens (Cilium conntrack
+                # expiry between cluster pods, NAT idle drops) don't
+                # send anything — the socket stays kernel-ESTABLISHED
+                # while being functionally dead. SELECT 1 on that fd
+                # blocks forever waiting for a response that never
+                # comes, and `check=` parks with it. The cluster
+                # exhibits exactly this: after ~2min idle between
+                # /inbox requests, the next aget_tuple hangs forever.
+                # Keepalives make the kernel probe every 10s after
+                # 30s idle, up to 3 times — dead conns fail within
+                # ~60s with ECONNRESET/ENOTCONN, the pool catches and
+                # replaces. See `project_langgraph_reporter_post_node_hang`.
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 3,
+            },
             check=AsyncConnectionPool.check_connection,
             open=False,
         )
