@@ -396,3 +396,84 @@ async def dump_asyncio_tasks() -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+# ---- DLQ (Phase 4.M3) ----
+
+
+@router.get("/dlq")
+async def list_dlq(
+    request: Request,
+    *,
+    since_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """List entries in `task_dlq`, newest first.
+
+    Phase 4.M3 — primary client is the Windmill DLQ-watcher cron which
+    posts new entries to Zulip `#dlq`.
+
+    Args:
+        since_id: ULID; if set, return only entries with id > since_id.
+            The Windmill cron tracks the last-seen ULID in its own
+            state so it only surfaces new entries.
+        limit: cap on rows returned (default 100). The Windmill cron
+            should never need more than its poll-interval-worth of
+            entries; the cap is defense-in-depth against an
+            unbounded query.
+    """
+    pool = request.app.state.queue_pool
+    if pool is None:
+        raise HTTPException(status_code=503, detail="queue pool not initialized")
+
+    where = "WHERE id > %s" if since_id else ""
+    params: tuple[Any, ...] = (since_id, limit) if since_id else (limit,)
+
+    async with pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            f"""
+            SELECT id, envelope, attempts, last_error, dlq_at
+            FROM task_dlq
+            {where}
+            ORDER BY id DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        rows = await cur.fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "envelope": row[1],
+            "attempts": row[2],
+            "last_error": row[3],
+            "dlq_at": row[4].isoformat() if row[4] else None,
+        }
+        for row in rows
+    ]
+
+
+@router.delete("/dlq/{task_id}")
+async def delete_dlq_entry(task_id: str, request: Request) -> dict[str, Any]:
+    """Acknowledge a DLQ entry by deleting it.
+
+    Used by the Windmill DLQ-watcher when the operator reacts to the
+    Zulip notification (👍 = ack-and-drop). The task is NOT requeued
+    here — that's a separate `/admin/dlq/{task_id}/requeue` if we add
+    it later.
+    """
+    pool = request.app.state.queue_pool
+    if pool is None:
+        raise HTTPException(status_code=503, detail="queue pool not initialized")
+
+    async with pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            "DELETE FROM task_dlq WHERE id = %s RETURNING id",
+            (task_id,),
+        )
+        row = await cur.fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"dlq entry {task_id!r} not found")
+    return {"task_id": task_id, "status": "deleted"}
