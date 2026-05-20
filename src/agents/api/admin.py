@@ -232,22 +232,70 @@ async def dump_asyncio_tasks() -> list[dict[str, Any]]:
     See `project_langgraph_reporter_post_node_hang` for the
     investigation this was added to support.
     """
+    def _walk_await_chain(coro: Any) -> list[str]:
+        """Walk a coroutine's cr_await chain to enumerate every suspended frame.
+
+        `task.get_stack()` returns only the outer-most suspended frame
+        — for our hang investigation we need to see EVERY layer of
+        await down to where the actual park is happening. The chain:
+        coro.cr_await is the next thing it's awaiting; if that's
+        another coroutine we recurse. Generators are similar via
+        gi_frame / gi_yieldfrom.
+
+        Output is one "file:lineno function" string per layer,
+        outermost first.
+        """
+        frames: list[str] = []
+        seen: set[int] = set()
+        cur: Any = coro
+        # Hard cap so a self-referential cycle (shouldn't happen but
+        # safer to bound) can't lock the endpoint.
+        for _ in range(50):
+            if cur is None or id(cur) in seen:
+                break
+            seen.add(id(cur))
+
+            frame = getattr(cur, "cr_frame", None) or getattr(cur, "gi_frame", None)
+            if frame is not None:
+                frames.append(
+                    f"{frame.f_code.co_filename}:{frame.f_lineno} {frame.f_code.co_name}"
+                )
+
+            # cr_await is the next-awaited coroutine on async def;
+            # gi_yieldfrom is the equivalent on generators (used by
+            # asyncio.gather, asyncio.wait_for, etc.).
+            nxt = getattr(cur, "cr_await", None) or getattr(cur, "gi_yieldfrom", None)
+            cur = nxt
+        return frames
+
     out: list[dict[str, Any]] = []
     for task in asyncio.all_tasks():
         try:
             coro = task.get_coro()
             coro_repr = repr(coro)[:200]
         except Exception:
+            coro = None
             coro_repr = "<repr failed>"
 
-        stack_frames: list[str] = []
+        # task.get_stack() returns only the immediate suspended frame.
+        # _walk_await_chain follows cr_await down to the innermost
+        # actually-blocked frame — that's where the hang is.
+        await_chain: list[str] = []
+        if coro is not None:
+            try:
+                await_chain = _walk_await_chain(coro)
+            except Exception as exc:
+                await_chain = [f"<walk failed: {type(exc).__name__}>"]
+
+        # Keep task.get_stack() output too as a sanity-check.
+        immediate_stack: list[str] = []
         try:
             for frame in task.get_stack():
-                stack_frames.append(
+                immediate_stack.append(
                     f"{frame.f_code.co_filename}:{frame.f_lineno} {frame.f_code.co_name}"
                 )
         except Exception:
-            stack_frames.append("<stack unavailable>")
+            immediate_stack.append("<stack unavailable>")
 
         out.append(
             {
@@ -255,7 +303,8 @@ async def dump_asyncio_tasks() -> list[dict[str, Any]]:
                 "coro": coro_repr,
                 "done": task.done(),
                 "cancelled": task.cancelled(),
-                "stack": stack_frames,
+                "await_chain": await_chain,
+                "immediate_stack": immediate_stack,
             }
         )
     return out
