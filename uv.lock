@@ -636,7 +636,7 @@ wheels = [
 
 [[package]]
 name = "langgraph-agents"
-version = "0.2.21"
+version = "0.2.22"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

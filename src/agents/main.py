@@ -8,6 +8,7 @@ checkpointer.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from collections.abc import AsyncIterator
@@ -232,10 +233,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # that survived the pod restart. Read-only; auto-resume is a
         # follow-up once P1.2 wires interrupt() into class-C/D nodes.
         # Never fails startup (sweep helper swallows its own errors).
-        await startup_log_paused_threads(app.state.graph)
+        #
+        # Run as a fire-and-forget background task so even a slow walk
+        # over a long checkpoint history can't block uvicorn's
+        # "Application startup complete" — that hold previously gated
+        # the /healthz probe and tripped Flux's helm-upgrade timeout.
+        # The sweep itself is bounded by DEFAULT_STARTUP_SWEEP_LIMIT.
+        sweep_task = asyncio.create_task(
+            startup_log_paused_threads(app.state.graph)
+        )
+        # Keep a reference so the task isn't GC'd; this is a known
+        # asyncio footgun for short-lived fire-and-forget tasks.
+        app.state.startup_sweep_task = sweep_task
 
         yield
         logger.info("shutting down")
+        # Cancel the sweep if it's still running on shutdown — it's
+        # diagnostic, not load-bearing, so we don't wait for it.
+        if not sweep_task.done():
+            sweep_task.cancel()
         flush_langfuse()
 
 
