@@ -177,11 +177,15 @@ async def sweep_paused_threads(
     return out
 
 
+DEFAULT_STARTUP_SWEEP_LIMIT = 200
+
+
 async def startup_log_paused_threads(
     graph: Any,
     *,
     stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
     log_cap: int = DEFAULT_LOG_CAP,
+    limit: int | None = DEFAULT_STARTUP_SWEEP_LIMIT,
 ) -> None:
     """Run the sweep on startup and log a structured warning per stale thread.
 
@@ -199,7 +203,7 @@ async def startup_log_paused_threads(
     """
     try:
         rows = await sweep_paused_threads(
-            graph, stale_after_seconds=stale_after_seconds
+            graph, stale_after_seconds=stale_after_seconds, limit=limit
         )
     except Exception as exc:
         slog.warning(
