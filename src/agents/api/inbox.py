@@ -15,13 +15,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from agents.observability import get_logger
 from agents.state import FleetState, Source
 from agents.tools.zulip import ZulipNotConfiguredError, send_dm
 
 logger = logging.getLogger("agents.api.inbox")
+slog = get_logger("inbox")
 
 router = APIRouter(prefix="", tags=["inbox"])
 
@@ -52,6 +55,16 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     if graph is None:
         raise HTTPException(status_code=503, detail="graph not initialized")
 
+    # Bind task_id + source on structlog contextvars so every structlog
+    # event emitted while serving this request carries them. The per-node
+    # wrapper in graphs/fleet.py additionally binds `agent` per-call, giving
+    # Loki the {agent, task_id, event} triple needed to render the dashboard
+    # task-trail viewer. Bindings live in the asyncio task's contextvars and
+    # die with the task — no manual unbind needed in the FastAPI request path.
+    structlog.contextvars.bind_contextvars(
+        task_id=req.task_id, source=req.source, user=req.user
+    )
+
     initial_state = FleetState(
         task_id=req.task_id,
         source=req.source,
@@ -60,6 +73,8 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     )
 
     config = {"configurable": {"thread_id": req.task_id}}
+
+    slog.info("inbox_start", content_preview=req.content[:120])
 
     # Run the graph. If it interrupts, the returned state has the interrupt
     # payload accessible via the graph's `aget_state(config).next` and tasks
@@ -77,6 +92,7 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
         # On pause, we let Windmill's approval-post flow handle the user-
         # visible message — don't DM here. The approval-post topic carries
         # the full request and the action buttons.
+        slog.info("inbox_paused", interrupt_count=len(interrupts))
         return InboxResponse(
             task_id=req.task_id,
             status="paused",
@@ -84,6 +100,11 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
         )
 
     output = final.get("output")
+    slog.info(
+        "inbox_complete",
+        has_output=output is not None,
+        output_len=len(output) if output else 0,
+    )
 
     # Zulip reply-back path: only fires when the caller is the triager-bot
     # outgoing-webhook and the request carried a user_id to reply to.

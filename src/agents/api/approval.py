@@ -10,11 +10,15 @@ from __future__ import annotations
 
 from typing import Literal
 
+import structlog
 from fastapi import APIRouter, HTTPException, Request
 from langgraph.types import Command
 from pydantic import BaseModel
 
+from agents.observability import get_logger
+
 router = APIRouter(prefix="", tags=["approval"])
+slog = get_logger("approval")
 
 Reaction = Literal["approve", "reject", "defer"]
 
@@ -38,6 +42,14 @@ async def post_approval(req: ApprovalRequest, request: Request) -> ApprovalRespo
     if graph is None:
         raise HTTPException(status_code=503, detail="graph not initialized")
 
+    # Bind contextvars so every structlog event during the resume carries
+    # the task_id + actor + reaction. Same async-task-scoped binding pattern
+    # used in `api/inbox.py`; lives for the duration of this request handler.
+    structlog.contextvars.bind_contextvars(
+        task_id=req.task_id, actor=req.actor, reaction=req.reaction
+    )
+    slog.info("approval_received")
+
     config = {"configurable": {"thread_id": req.task_id}}
 
     # Verify the workflow is actually paused at an interrupt. MUST use
@@ -60,8 +72,11 @@ async def post_approval(req: ApprovalRequest, request: Request) -> ApprovalRespo
 
     final = await graph.ainvoke(Command(resume=resume_value), config=config)
 
+    output = final.get("output")
+    slog.info("approval_resumed_complete", has_output=output is not None)
+
     return ApprovalResponse(
         task_id=req.task_id,
         status="complete",
-        output=final.get("output"),
+        output=output,
     )
