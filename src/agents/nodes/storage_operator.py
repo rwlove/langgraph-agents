@@ -24,11 +24,24 @@ from pydantic import BaseModel, Field
 
 from agents.llm import llm
 from agents.personas import load_persona
-from agents.state import ActionClass, AgentId, FleetState
+from agents.state import ActionClass, AgentId, ApprovalRequest, FleetState
 from agents.tools.obsidian import write_draft
 
 _AGENT_ID: AgentId = "storage-operator"
 _TEMPERATURE = 0.2
+
+# Canonical write target for storage-operator-proposed actions. PVC
+# manifests, Ceph CR changes, Longhorn label edits, CNPG ObjectStore
+# retention bumps — every storage side effect this agent proposes lands as
+# a kubectl apply against home-ops. Direct Ceph CLI / Longhorn UI / Garage
+# admin paths are out-of-scope here (no ceph-mcp / longhorn-mcp / garage-mcp
+# yet). Mirrors smart_home_operator._HA_WRITE_TARGET.
+_K8S_WRITE_TARGET = "kubectl-mcp.kubectl_apply"
+
+# action_class values that imply a side effect requiring approval. Class A
+# (read-only analysis) and B (vault-local commit) never need a user verdict;
+# Class C (push/rollout) and D (apply directly) do.
+_APPROVAL_REQUIRED_CLASSES: frozenset[ActionClass] = frozenset({"C", "D"})
 
 
 class StorageFinding(BaseModel):
@@ -210,10 +223,61 @@ def storage_operator_node(state: FleetState) -> dict[str, Any]:
     markdown = _render_markdown(finding, state.task_id)
     result = write_draft(state.task_id, markdown, kind="storage")
 
-    return {
+    update: dict[str, Any] = {
         "output": (
             f"storage finding: {result.path} "
             f"(class={finding.action_class}, handoff={finding.handoff_target}, "
             f"recovery_path={finding.recovery_path_touched})"
         ),
     }
+
+    # Approval composition. The schema's `handoff_target == "errand-runner"`
+    # + `action_class in {C, D}` is the explicit signal the LLM emits for "I
+    # want this storage side effect executed, please get the user's verdict."
+    # Recovery-path overrides (Longhorn NFS backup target / Garage substrate
+    # / beast slot-4 OSDs / HA recorder / in-flight Barman restore) force
+    # `user` handoff in the persona, so by the time we get here those tasks
+    # have already been downgraded out of the errand-runner path.
+    if (
+        finding.handoff_target == "errand-runner"
+        and finding.action_class in _APPROVAL_REQUIRED_CLASSES
+    ):
+        update["approval_request"] = _compose_approval_request(finding)
+        # Specialist → errand-runner routing. The fleet graph's
+        # `_route_after_specialist` reads this; without it the graph would
+        # END before the errand-runner ever sees the request.
+        update["target_agent"] = "errand-runner"
+
+    return update
+
+
+def _compose_approval_request(finding: StorageFinding) -> ApprovalRequest:
+    """Translate a StorageFinding into the ApprovalRequest errand-runner expects.
+
+    Class C requires an undo path (errand-runner refuses Class C without one
+    and escalates to D). For storage changes we derive the undo by taking
+    the finding's rollback text — verbatim — and prefixing it with the
+    canonical write target. The rollback field is already mandatory +
+    verbatim per the eight-clause execution gate; if a rollback is "restore
+    from backup" the gate flips action_class to A in the persona, so we
+    never get here without a paste-and-restart rollback.
+
+    payload_summary collapses the proposed change into the broker UI's
+    single-line render. Truncated at 200 chars to keep Pushover / Zulip
+    notification surfaces readable; the full draft lives in the vault and
+    is linked from the broker message.
+    """
+    summary = finding.proposed_change.strip().splitlines()[0][:200]
+    undo_path: str | None = None
+    if finding.rollback.strip():
+        # Embed the rollback as a description, not a callable target — the
+        # broker UI displays it; errand-runner uses its presence (not its
+        # content) as the Class-C gate.
+        undo_path = f"{_K8S_WRITE_TARGET}: {finding.rollback.strip().splitlines()[0][:160]}"
+    return ApprovalRequest(
+        action_class=finding.action_class,
+        target=_K8S_WRITE_TARGET,
+        payload_summary=summary,
+        undo_path=undo_path,
+        proposed_by=_AGENT_ID,
+    )

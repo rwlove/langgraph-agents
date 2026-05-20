@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from agents.nodes.observability_operator import ObservabilityFinding, observability_operator_node
 from agents.personas import invalidate_cache, load_persona
-from agents.state import FleetState
+from agents.state import ApprovalRequest, FleetState
 
 
 def _fake_safe_finding() -> ObservabilityFinding:
@@ -285,3 +285,62 @@ def test_observability_operator_persona_loads(temp_vault: Path) -> None:
     persona = load_persona("observability-operator")
     assert persona
     assert "SOUL — observability-operator" in persona
+
+
+# ---------------------------------------------------------------------------
+# ApprovalRequest composition (mirrors PR #39 smart-home-operator wiring).
+# ---------------------------------------------------------------------------
+
+
+def test_observability_operator_composes_approval_request_for_action(
+    temp_vault: Path,
+) -> None:
+    """A Class-C observability finding handed to errand-runner MUST populate
+    state.approval_request + target_agent so the fleet graph can route to
+    errand-runner and trigger the interrupt() path."""
+    state = FleetState(
+        task_id="t-obs-action-001",
+        source="zulip",
+        content="add the longhorn degraded prometheusrule",
+    )
+
+    class _FakeLLM:
+        def invoke(self, _messages):
+            return _fake_safe_finding()
+
+    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()):
+        update = observability_operator_node(state)
+
+    assert update["target_agent"] == "errand-runner"
+    req = update["approval_request"]
+    assert isinstance(req, ApprovalRequest)
+    assert req.action_class == "C"
+    assert req.target == "kubectl-mcp.kubectl_apply"
+    assert req.proposed_by == "observability-operator"
+    # undo_path must be present for Class C — errand-runner refuses Class C
+    # without an undo and escalates to D.
+    assert req.undo_path is not None
+    assert "delete the prometheusrule" in req.undo_path.lower()
+    # payload_summary should describe the proposed change.
+    assert "PrometheusRule" in req.payload_summary
+
+
+def test_observability_operator_skips_approval_for_question(temp_vault: Path) -> None:
+    """A Class-A (recovery-path, analysis-only) finding with handoff_target=user
+    must NOT set approval_request or target_agent — the existing question/
+    research path stays END-only."""
+    state = FleetState(
+        task_id="t-obs-question-001",
+        source="text",
+        content="disable pushover for 2 weeks while i'm on vacation",
+    )
+
+    class _FakeLLM:
+        def invoke(self, _messages):
+            return _fake_recovery_path_finding()
+
+    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()):
+        update = observability_operator_node(state)
+
+    assert "approval_request" not in update
+    assert "target_agent" not in update
