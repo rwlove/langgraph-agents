@@ -9,6 +9,7 @@ NetworkPolicy that constrains ingress.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, date, datetime
 from typing import Any
@@ -203,3 +204,58 @@ async def costs_today() -> CostSummary:
         per_agent=per_agent,
         date=today,
     )
+
+
+# --- diagnostic: asyncio task graph ---
+
+
+@router.get("/asyncio-tasks")
+async def dump_asyncio_tasks() -> list[dict[str, Any]]:
+    """Dump all asyncio Tasks in the current event loop with their stacks.
+
+    Diagnostic for hung /inbox requests where the parking point isn't
+    visible from py-spy thread dumps. py-spy shows the loop is alive but
+    can't see asyncio Task awaits; this endpoint walks `asyncio.all_tasks`
+    and returns each task's stack so the actual parking await is visible.
+
+    Output per task:
+      - name: the asyncio.Task.get_name() value
+      - coro: a one-line repr of the wrapped coroutine
+      - done: bool
+      - cancelled: bool
+      - stack: list of "file:lineno function" strings (innermost last)
+
+    Defense-in-depth: this endpoint is inside /admin which the
+    cluster CNP gates to network/envoy + collab/open-webui +
+    home/windmill-*. Don't expose externally.
+
+    See `project_langgraph_reporter_post_node_hang` for the
+    investigation this was added to support.
+    """
+    out: list[dict[str, Any]] = []
+    for task in asyncio.all_tasks():
+        try:
+            coro = task.get_coro()
+            coro_repr = repr(coro)[:200]
+        except Exception:
+            coro_repr = "<repr failed>"
+
+        stack_frames: list[str] = []
+        try:
+            for frame in task.get_stack():
+                stack_frames.append(
+                    f"{frame.f_code.co_filename}:{frame.f_lineno} {frame.f_code.co_name}"
+                )
+        except Exception:
+            stack_frames.append("<stack unavailable>")
+
+        out.append(
+            {
+                "name": task.get_name(),
+                "coro": coro_repr,
+                "done": task.done(),
+                "cancelled": task.cancelled(),
+                "stack": stack_frames,
+            }
+        )
+    return out
