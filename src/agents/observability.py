@@ -182,6 +182,44 @@ def llm_timer() -> Iterator[dict[str, float]]:
         out["duration"] = time.perf_counter() - t0
 
 
+def global_claude_spend_usd() -> float:
+    """Return the in-process accumulated Claude spend, in USD.
+
+    Sums the ``langgraph_cost_usd_total`` Counter across every label
+    combination where ``group="claude"``. This is the value the
+    cost-cap guard in ``agents.llm._build_claude`` checks before
+    handing out a ``ChatAnthropic`` instance.
+
+    Caveats:
+
+    - **Process-local.** The Counter lives in this process's
+      ``prometheus_client`` default registry. There's no Redis /
+      Postgres aggregate; another replica wouldn't see this one's
+      spend. We deploy with ``strategy: Recreate`` + a single
+      replica, so concurrency isn't the problem.
+    - **Resets on pod restart.** Same caveat as the
+      ``/admin/costs/today`` dashboard panel — a rollout or crash
+      zeroes the in-process counter and the cap effectively resets.
+      For the global-daily cap that's been deemed acceptable: a
+      restart-loop spending money in spikes is bounded by the
+      restart-cost-per-cycle, not the daily cap. If the loop's
+      spend-per-restart exceeds the cap, the alarm is the restart
+      loop, not the cap.
+    - **No window.** The Counter accumulates monotonically over the
+      process lifetime. There's no rolling 24h window on the
+      in-process counter; the name "24h spend" applies in spirit
+      because the pod is usually rolled around once a day for
+      unrelated reasons. The Langfuse-backed dashboard remains the
+      authoritative source of truth for actual cost over time.
+    """
+    total = 0.0
+    for metric in langgraph_cost_usd_total.collect():
+        for sample in metric.samples:
+            if sample.name.endswith("_total") and sample.labels.get("group") == "claude":
+                total += sample.value
+    return total
+
+
 # ---------------------------------------------------------------------------
 # LangChain callback handler — primary emission path for Phase 2's factory
 # ---------------------------------------------------------------------------
@@ -379,6 +417,7 @@ __all__ = [
     "configure_structlog",
     "flush_langfuse",
     "get_logger",
+    "global_claude_spend_usd",
     "init_langfuse",
     "langfuse_callback_handler",
     "langgraph_calls_total",
