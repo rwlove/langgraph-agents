@@ -36,7 +36,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 
-from agents.observability import LangGraphMetricsCallback
+from agents.observability import LangGraphMetricsCallback, langfuse_callback_handler
 from agents.personas import load_persona
 from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS, AgentId
@@ -134,17 +134,22 @@ def _make_llm(agent_id: AgentId, temperature: float | None) -> ChatOllama:
     """
     settings = get_settings()
     model_name = _PER_AGENT_MODEL.get(agent_id, "qwen2.5:7b")
-    handler = LangGraphMetricsCallback(
-        agent=agent_id,
-        group="local",
-        model=model_name,
-        trigger="openwebui",
-    )
+    callbacks: list[Any] = [
+        LangGraphMetricsCallback(
+            agent=agent_id,
+            group="local",
+            model=model_name,
+            trigger="openwebui",
+        ),
+    ]
+    lf = langfuse_callback_handler()
+    if lf is not None:
+        callbacks.append(lf)
     return ChatOllama(
         model=model_name,
         base_url=settings.ollama_base_url.removesuffix("/v1"),
         temperature=0.2 if temperature is None else temperature,
-        callbacks=[handler],
+        callbacks=callbacks,
     )
 
 

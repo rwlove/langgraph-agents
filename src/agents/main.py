@@ -25,7 +25,12 @@ from psycopg_pool import AsyncConnectionPool
 from agents.api import admin, approval, chat_completions, health, inbox
 from agents.graphs.fleet import build_fleet_graph
 from agents.memory_store import MCPMemoryStore, build_pool
-from agents.observability import configure_structlog, metrics_text
+from agents.observability import (
+    configure_structlog,
+    flush_langfuse,
+    init_langfuse,
+    metrics_text,
+)
 from agents.settings import Settings, get_settings
 from agents.state import (
     ActivityLogEntry,
@@ -204,6 +209,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     # JSON structured logs → stdout → Vector → Loki (Path A per plan v5).
     configure_structlog(level=settings.log_level)
+    # Langfuse per-task trace UI. Skipped silently if LANGFUSE_HOST /
+    # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY aren't set yet — the
+    # langgraph-agents secret already carries placeholders that the
+    # operator fills in once a project is created in the langfuse UI.
+    init_langfuse()
     logger.info("starting langgraph-agents, vault_root=%s", settings.vault_root)
 
     async with AsyncExitStack() as stack:
@@ -218,6 +228,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         yield
         logger.info("shutting down")
+        flush_langfuse()
 
 
 app = FastAPI(

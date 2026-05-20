@@ -35,10 +35,18 @@ from uuid import UUID
 
 import structlog
 from langchain_core.callbacks import BaseCallbackHandler
+from langfuse import Langfuse
+from langfuse.langchain import CallbackHandler as LangfuseLangchainCallback
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+
+from agents.settings import get_settings
 
 if TYPE_CHECKING:
     from langchain_core.outputs import LLMResult
+
+
+_LANGFUSE_LOGGER = logging.getLogger("agents.observability.langfuse")
+_langfuse_client: Langfuse | None = None
 
 # ---------------------------------------------------------------------------
 # Metric definitions (label set is the v20 schema; do not add labels without
@@ -291,11 +299,88 @@ def metrics_text() -> tuple[bytes, str]:
     return generate_latest(), CONTENT_TYPE_LATEST
 
 
+# ---------------------------------------------------------------------------
+# Langfuse — per-task trace UI (self-hosted; see kubernetes/apps/ai/langfuse/)
+# ---------------------------------------------------------------------------
+
+
+def init_langfuse() -> None:
+    """Initialize the process-wide Langfuse client from settings.
+
+    Idempotent and safe to call at app startup. If any of
+    LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY is unset
+    (the in-cluster langfuse hasn't been provisioned yet, or the
+    project keys haven't been copied to 1Password yet), tracing is
+    silently disabled and the factory in ``agents.llm`` skips
+    attaching the Langfuse callback.
+
+    The client picks up trace context from the LangChain callback's
+    ``run_id`` and merges per-call metadata into a langfuse trace. We
+    don't need to drive trace lifecycle manually — the LangChain
+    integration handles it as long as the CallbackHandler is attached
+    to each chat-model instance.
+    """
+    global _langfuse_client  # noqa: PLW0603
+    settings = get_settings()
+    if _langfuse_client is not None:
+        return
+    if not (
+        settings.langfuse_host
+        and settings.langfuse_public_key
+        and settings.langfuse_secret_key
+    ):
+        _LANGFUSE_LOGGER.info(
+            "langfuse keys not configured; per-task tracing disabled"
+        )
+        return
+
+    _langfuse_client = Langfuse(
+        host=settings.langfuse_host,
+        public_key=settings.langfuse_public_key,
+        secret_key=settings.langfuse_secret_key,
+    )
+    _LANGFUSE_LOGGER.info(
+        "langfuse client initialized (host=%s)", settings.langfuse_host
+    )
+
+
+def langfuse_callback_handler() -> BaseCallbackHandler | None:
+    """Return a fresh LangChain CallbackHandler bound to the process
+    Langfuse client, or None when tracing is disabled.
+
+    The factory in ``agents.llm`` calls this on each ``_build_ollama`` /
+    ``_build_claude`` and appends the returned handler (alongside the
+    Prom metrics callback) to the model's intrinsic ``callbacks`` list.
+    Intrinsic-not-with_config is the only pattern that survives
+    ``with_structured_output()`` chain wrapping — see the docstring
+    on ``LangGraphMetricsCallback`` for the empirical evidence.
+    """
+    if _langfuse_client is None:
+        return None
+    # The handler reads trace context from langgraph's run_id + carries
+    # contextvars (task_id, agent) we already bound in api/inbox.py +
+    # graphs/fleet.py — those land on the Langfuse trace as metadata.
+    return LangfuseLangchainCallback()
+
+
+def flush_langfuse() -> None:
+    """Flush buffered Langfuse events. Call on graceful shutdown."""
+    if _langfuse_client is None:
+        return
+    try:
+        _langfuse_client.flush()
+    except Exception as exc:  # best-effort
+        _LANGFUSE_LOGGER.warning("langfuse flush failed: %s", exc)
+
+
 __all__ = [
     "CONTENT_TYPE_LATEST",
     "LangGraphMetricsCallback",
     "configure_structlog",
+    "flush_langfuse",
     "get_logger",
+    "init_langfuse",
+    "langfuse_callback_handler",
     "langgraph_calls_total",
     "langgraph_cost_usd_total",
     "langgraph_llm_duration_seconds",

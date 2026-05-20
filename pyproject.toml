@@ -39,8 +39,12 @@ dependencies = [
     # Structured logging
     "structlog>=24.4.0",
 
-    # Observability
+    # Observability — langfuse.langchain.CallbackHandler needs the
+    # `langchain` meta-package (not just langchain-core) at import time;
+    # see `langfuse/langchain/CallbackHandler.py` which guards with
+    # `import langchain` and raises ModuleNotFoundError otherwise.
     "langfuse>=2.55.0",
+    "langchain>=1.3.0",
     "prometheus-client>=0.21.0",
 ]
 
