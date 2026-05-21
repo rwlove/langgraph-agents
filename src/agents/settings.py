@@ -238,6 +238,27 @@ class Settings(BaseSettings):
         description="Envelope `intent` values that Renee may submit.",
     )
 
+    # --- approval-post webhook (Phase 4.M2 worker-side; companion to
+    # Phase 4.M3 DLQ surface). When a graph node calls ``interrupt()``
+    # with an ApprovalRequest payload, the worker POSTs the request to
+    # this URL so the existing ntfy + Zulip approval-post path fires
+    # immediately instead of waiting for the 30-min escalation tier
+    # from ``langgraph-awaiting-user-sweep.ts``.
+    #
+    # Unset disables the worker-side post (the sweep still catches
+    # paused tasks at 30 minutes). Typical value points at a Windmill
+    # ``langgraph-approval-post`` script's job-run URL on the
+    # cluster-internal Service.
+    approval_post_webhook_url: str | None = Field(
+        default=None,
+        description=(
+            "URL the queue worker POSTs ApprovalRequest payloads to when a "
+            "graph interrupt() pauses for human approval. POST body shape: "
+            '{"task_id": str, "approval_request": {...}}. Best-effort — '
+            "failures log but do not raise."
+        ),
+    )
+
     # --- runtime ---
     log_level: str = "INFO"
     user_timezone: str = "America/New_York"

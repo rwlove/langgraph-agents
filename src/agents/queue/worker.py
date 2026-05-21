@@ -34,10 +34,12 @@ import os
 import socket
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import structlog
 from opentelemetry import trace
 
 from agents.observability import get_logger
+from agents.settings import get_settings
 from agents.state import FleetState
 from agents.tools.zulip import ZulipNotConfiguredError, send_dm
 
@@ -147,6 +149,16 @@ class QueueWorker:
                     await self._queue.to_dlq(task_id, repr(exc))
                 return
 
+        # Detect approval-interrupt before acking. When a specialist
+        # called interrupt() with an ApprovalRequest payload, the
+        # graph returns with no `output`; the request is exposed via
+        # the checkpointer's interrupts list. POST it to the
+        # configured Windmill webhook so ntfy + Zulip approval cards
+        # fire immediately — without this, the first user-visible
+        # signal is the 30-min escalation tier from
+        # langgraph-awaiting-user-sweep.ts.
+        await self._post_approval_for_interrupts(task_id)
+
         await self._ack_with_result(task_id, output)
 
         # Zulip DM-back if applicable — preserves the synchronous
@@ -191,6 +203,66 @@ class QueueWorker:
         final = await self._graph.ainvoke(initial_state, config=config)
         output = final.get("output") if isinstance(final, dict) else None
         return output if isinstance(output, str) else None
+
+    async def _post_approval_for_interrupts(self, task_id: str) -> None:
+        """POST an ApprovalRequest to the Windmill approval-post webhook
+        when the graph paused at ``interrupt()``.
+
+        Best-effort: no exceptions propagate. The /admin/tasks/<id>
+        endpoint independently exposes the checkpointer's interrupts,
+        and langgraph-awaiting-user-sweep.ts catches anything missed
+        here at the 30-min escalation tier.
+        """
+        settings = get_settings()
+        webhook_url = settings.approval_post_webhook_url
+        if not webhook_url:
+            return
+
+        config: Any = {"configurable": {"thread_id": task_id}}
+        try:
+            snapshot = await self._graph.aget_state(config)
+        except Exception:
+            logger.exception("approval-post: aget_state failed task=%s", task_id)
+            return
+
+        # Collect interrupt values across tasks; an ApprovalRequest is
+        # a dict carrying `action_class` (the schema field that
+        # distinguishes it from any other interrupt payload that may
+        # appear in the future).
+        approval_request: dict[str, Any] | None = None
+        for graph_task in snapshot.tasks:
+            for it in graph_task.interrupts:
+                if isinstance(it.value, dict) and "action_class" in it.value:
+                    approval_request = dict(it.value)
+                    break
+            if approval_request is not None:
+                break
+
+        if approval_request is None:
+            return
+
+        payload = {"task_id": task_id, "approval_request": approval_request}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(webhook_url, json=payload)
+        except Exception:
+            logger.exception("approval-post: webhook call failed task=%s", task_id)
+            return
+
+        if resp.status_code >= 400:
+            logger.warning(
+                "approval-post: webhook %d task=%s body=%.200s",
+                resp.status_code,
+                task_id,
+                resp.text,
+            )
+        else:
+            slog.info(
+                "approval_post",
+                task_id=task_id,
+                status=resp.status_code,
+                action_class=approval_request.get("action_class"),
+            )
 
     async def _ack_with_result(self, task_id: str, output: str | None) -> None:
         """Mark task done and store the output for `/admin/tasks/<id>` retrieval."""
