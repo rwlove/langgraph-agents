@@ -16,6 +16,7 @@ from importlib import resources
 from ulid import ULID
 
 from agents.queue import TaskClaim, TaskQueue
+from agents.queue.migrate import _split_statements
 from agents.queue.store import NOTIFY_CHANNEL
 
 
@@ -63,6 +64,52 @@ def test_migration_sql_idempotent_marks() -> None:
             or upper.startswith("CREATE UNIQUE INDEX")
         ):
             assert "IF NOT EXISTS" in upper, f"non-idempotent CREATE: {line!r}"
+
+
+def test_migrate_split_statements_handles_multi_statement_file() -> None:
+    """Real migration files contain CREATE TABLE + multiple CREATE INDEX —
+    they must split into individual statements so psycopg's extended
+    query protocol (forced into "prepare every statement" mode by the
+    checkpointer pool's prepare_threshold=0) doesn't choke on the
+    multi-statement form.
+    """
+    sql = (
+        resources.files("agents.queue.migrations")
+        .joinpath("001_task_queue.sql")
+        .read_text()
+    )
+    stmts = _split_statements(sql)
+    # Real shape: 2 CREATE TABLE + 3 CREATE INDEX + 1 CREATE UNIQUE INDEX
+    # + 2 COMMENT ON TABLE = 8 statements (give or take if the file is
+    # edited; pin the lower bound).
+    assert len(stmts) >= 5
+    # No `;` should remain inside any statement (we stripped them).
+    assert all(";" not in s for s in stmts)
+    # Comment-only lines must be filtered.
+    assert all(not s.startswith("--") for s in stmts)
+    # First statement should be the CREATE TABLE task_queue.
+    assert "CREATE TABLE IF NOT EXISTS task_queue" in stmts[0]
+
+
+def test_migrate_split_statements_strips_comment_lines() -> None:
+    """A `;` inside a -- comment line must not split the statement."""
+    sql = """
+    -- this has a ; embedded in a comment
+    CREATE TABLE foo (id INT);
+    -- another comment
+    CREATE INDEX foo_idx ON foo(id);
+    """
+    stmts = _split_statements(sql)
+    assert len(stmts) == 2
+    assert "CREATE TABLE foo" in stmts[0]
+    assert "CREATE INDEX foo_idx" in stmts[1]
+
+
+def test_migrate_split_statements_handles_trailing_no_semicolon() -> None:
+    """The last statement may omit the trailing semicolon."""
+    sql = "CREATE TABLE foo (id INT);\nALTER TABLE foo ADD COLUMN x INT"
+    stmts = _split_statements(sql)
+    assert stmts == ["CREATE TABLE foo (id INT)", "ALTER TABLE foo ADD COLUMN x INT"]
 
 
 def test_taskqueue_attempts_remaining_uses_envelope_policy() -> None:
