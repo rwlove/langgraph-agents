@@ -23,7 +23,7 @@ single-tenant and trusts the requester.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -108,7 +108,7 @@ async def create_todo(body: TodoCreate, request: Request) -> Todo:
             (todo_id, body.body, body.tags, body.metadata),
         )
         row = await cur.fetchone()
-    assert row is not None  # noqa: S101 — INSERT … RETURNING never empty
+    assert row is not None  # INSERT … RETURNING never empty
     return _row_to_todo(row)
 
 
