@@ -47,16 +47,19 @@ async def list_agents() -> list[dict[str, str]]:
 async def list_tasks(request: Request) -> list[dict[str, Any]]:
     """List all tasks the checkpointer knows about.
 
-    Used by n8n's awaiting-user-sweep to find paused workflows. The
-    checkpointer's list/aget_state API is the source of truth.
+    Used by the awaiting-user-sweep Windmill script to find paused
+    workflows. Reads run through `app.state.admin_graph`, which has
+    its own checkpointer instance (own pool, own `asyncio.Lock`) so
+    the N+1 scan can't be blocked by a hung dispatch-path call on
+    the main checkpointer. See `main.py` lifespan comment.
     """
-    graph = request.app.state.graph
+    graph = request.app.state.admin_graph
     if graph is None:
-        raise HTTPException(status_code=503, detail="graph not initialized")
+        raise HTTPException(status_code=503, detail="admin graph not initialized")
 
     out: list[dict[str, Any]] = []
-    # graph.checkpointer.alist({}) yields ALL checkpoints across threads.
-    # We dedupe to the latest per thread.
+    # admin_graph.checkpointer.alist({}) yields ALL checkpoints across
+    # threads. We dedupe to the latest per thread.
     seen: set[str] = set()
     async for cp in graph.checkpointer.alist({}):
         thread_id = cp.config.get("configurable", {}).get("thread_id")
@@ -125,7 +128,10 @@ async def get_task(task_id: str, request: Request) -> dict[str, Any]:
                 "ttl_expires_at": ttl_expires_at.isoformat() if ttl_expires_at else None,
             }
 
-    graph = request.app.state.graph
+    # Read-only checkpointer access — use the admin graph so the
+    # daily-digest polling loop can't be blocked by a hung dispatch-path
+    # call on the main checkpointer's lock. See `main.py` lifespan.
+    graph = request.app.state.admin_graph
     if graph is not None:
         config = {"configurable": {"thread_id": task_id}}
         try:
