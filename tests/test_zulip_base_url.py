@@ -64,10 +64,11 @@ def test_send_dm_uses_base_url_when_set(monkeypatch: pytest.MonkeyPatch) -> None
         base_url="http://zulip.collab.svc.cluster.local",
     )
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
-    def _capture(url: str, **_kwargs: object) -> MagicMock:
+    def _capture(url: str, **kwargs: object) -> MagicMock:
         captured["url"] = url
+        captured["headers"] = kwargs.get("headers") or {}
         resp = MagicMock()
         resp.status_code = 200
         resp.json.return_value = {"id": 2}
@@ -77,6 +78,35 @@ def test_send_dm_uses_base_url_when_set(monkeypatch: pytest.MonkeyPatch) -> None
         send_dm(8, "hi")
 
     assert captured["url"] == "http://zulip.collab.svc.cluster.local/api/v1/messages"
+    # Host header MUST be the public hostname even though we route to
+    # the in-cluster Service — Django ALLOWED_HOSTS checks this and
+    # rejects with a bare 400 page if the in-cluster hostname leaks
+    # through.
+    assert captured["headers"].get("Host") == "chat.example.com"
+
+
+def test_send_dm_no_host_override_when_base_url_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy host-only mode doesn't need a Host override — httpx derives
+    it from the URL and matches the public hostname naturally.
+    """
+    _set_zulip(monkeypatch)  # no base_url
+
+    captured: dict[str, object] = {}
+
+    def _capture(url: str, **kwargs: object) -> MagicMock:
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers") or {}
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"id": 4}
+        return resp
+
+    with patch("agents.tools.zulip.httpx.post", side_effect=_capture):
+        send_dm(8, "hi")
+
+    assert "Host" not in captured["headers"]
 
 
 def test_send_dm_strips_trailing_slash_on_base_url(
