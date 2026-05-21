@@ -349,6 +349,57 @@ def test_list_tasks_503_when_admin_graph_missing(temp_vault: Path) -> None:
         assert "admin graph" in r.json()["detail"]
 
 
+def test_list_tasks_does_not_call_aget_state_inside_alist_iteration(
+    temp_vault: Path,
+) -> None:
+    """Regression: AsyncPostgresSaver holds `self.lock` across alist()'s
+    yields. Calling `aget_state` (which re-acquires the same lock) from
+    inside the `async for cp in alist(...)` body self-deadlocks the
+    handler — observed in prod on v0.2.30, where /admin/tasks hangs >45s
+    even on a quiet cluster.
+
+    Simulates the lock semantic with an explicit flag instead of a real
+    asyncio.Lock so the test fails LOUDLY (AssertionError) instead of
+    hanging if the handler regresses to the combined loop.
+    """
+    cps = [
+        MagicMock(config={"configurable": {"thread_id": f"t-{i}"}}) for i in range(3)
+    ]
+
+    alist_iterating = False
+
+    async def _alist(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+        nonlocal alist_iterating
+        alist_iterating = True
+        try:
+            for cp in cps:
+                yield cp
+        finally:
+            alist_iterating = False
+
+    async def _aget_state(_config: dict[str, Any]) -> Any:
+        assert not alist_iterating, (
+            "aget_state called while alist() iteration is still in flight — "
+            "this self-deadlocks on AsyncPostgresSaver.lock in production"
+        )
+        snap = MagicMock()
+        snap.tasks = []
+        snap.values = {"target_agent": "coder"}
+        return snap
+
+    admin_graph = MagicMock()
+    admin_graph.checkpointer = MagicMock()
+    admin_graph.checkpointer.alist = MagicMock(side_effect=lambda *a, **kw: _alist())
+    admin_graph.aget_state = AsyncMock(side_effect=_aget_state)
+
+    app = _make_app_with_graph(temp_vault)
+    app.state.admin_graph = admin_graph
+    with TestClient(app) as client:
+        r = client.get("/admin/tasks")
+        assert r.status_code == 200
+        assert len(r.json()) == 3
+
+
 def test_get_task_checkpointer_uses_admin_graph(temp_vault: Path) -> None:
     """`GET /admin/tasks/<id>` checkpointer read uses `admin_graph`."""
     interrupt = MagicMock()

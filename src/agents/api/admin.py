@@ -50,22 +50,38 @@ async def list_tasks(request: Request) -> list[dict[str, Any]]:
     Used by the awaiting-user-sweep Windmill script to find paused
     workflows. Reads run through `app.state.admin_graph`, which has
     its own checkpointer instance (own pool, own `asyncio.Lock`) so
-    the N+1 scan can't be blocked by a hung dispatch-path call on
-    the main checkpointer. See `main.py` lifespan comment.
+    the dispatch path's hung calls can't block us. See `main.py`
+    lifespan comment for that isolation.
+
+    Implementation is two-phase to avoid SELF-deadlocking on the
+    admin saver's own lock: `AsyncPostgresSaver._cursor` does
+    `async with self.lock, get_connection(...)` and holds that lock
+    across `alist`'s `yield` points (langgraph
+    `checkpoint/postgres/aio.py`). The non-re-entrant `asyncio.Lock`
+    means an `aget_state` call inside the `alist` loop body tries to
+    re-acquire a lock the same task already holds — and waits forever.
+    Drain `alist` to `thread_id`s first (lock released when iterator
+    exits), then call `aget_state` per thread (each one takes and
+    releases the lock cleanly).
     """
     graph = request.app.state.admin_graph
     if graph is None:
         raise HTTPException(status_code=503, detail="admin graph not initialized")
 
-    out: list[dict[str, Any]] = []
-    # admin_graph.checkpointer.alist({}) yields ALL checkpoints across
-    # threads. We dedupe to the latest per thread.
+    # Phase 1 — drain alist into unique thread_ids. Saver lock is
+    # released the moment this iterator exits.
     seen: set[str] = set()
     async for cp in graph.checkpointer.alist({}):
         thread_id = cp.config.get("configurable", {}).get("thread_id")
-        if not thread_id or thread_id in seen:
-            continue
-        seen.add(thread_id)
+        if thread_id:
+            seen.add(thread_id)
+
+    # Phase 2 — aget_state per thread. Each call acquires + releases
+    # the saver lock independently, so no self-deadlock. Sequential
+    # rather than gathered because every call serializes through the
+    # same lock anyway; gather would only add complexity.
+    out: list[dict[str, Any]] = []
+    for thread_id in seen:
         snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
         interrupts = [
             {"id": i.id, "value": dict(i.value) if i.value else None}
