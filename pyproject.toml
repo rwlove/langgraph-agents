@@ -81,6 +81,7 @@ dev = [
 
 [project.scripts]
 langgraph-agents = "agents.main:run"
+hai = "agents.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -60,6 +60,16 @@ class Settings(BaseSettings):
         default=None,
         description="Optional. Required only for agents that opt into Claude API.",
     )
+    hai_cli_token: str | None = Field(
+        default=None,
+        description=(
+            "Static Bearer token that the `hai` CLI presents on /inbox and "
+            "/admin/* endpoints. Validated by the auth middleware in "
+            "agents/api/auth.py. When unset, the middleware short-circuits "
+            "and allows all requests (dev / local-only mode). When set, "
+            "Authorization: Bearer <token> is required for protected paths."
+        ),
+    )
     enable_claude_api: bool = Field(
         default=False,
         description=(
