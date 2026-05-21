@@ -241,7 +241,16 @@ class QueueWorker:
         if approval_request is None:
             return
 
-        payload = {"task_id": task_id, "approval_request": approval_request}
+        # Windmill convention: function args == top-level body keys. The
+        # receiving `langgraph-approval-post` script has signature
+        # ``main(task_id, paused_for: {approval_request: ...})`` — match
+        # it, and keep the same `paused_for` shape the synchronous
+        # /inbox returned in v0.2.x so any future callers that reused
+        # that shape stay compatible.
+        payload = {
+            "task_id": task_id,
+            "paused_for": {"approval_request": approval_request},
+        }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(webhook_url, json=payload)

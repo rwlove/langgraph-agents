@@ -124,8 +124,10 @@ def test_approval_post_fires_when_interrupt_present(
     url, body = recorder.calls[0]
     assert url == "http://windmill.example/api/approval-post"
     assert body["task_id"] == "01J-task"
-    assert body["approval_request"]["action_class"] == "C"
-    assert body["approval_request"]["proposed_by"] == "ml-operator"
+    # Windmill convention: function args == top-level body keys.
+    # The receiving script expects `paused_for: {approval_request: ...}`.
+    assert body["paused_for"]["approval_request"]["action_class"] == "C"
+    assert body["paused_for"]["approval_request"]["proposed_by"] == "ml-operator"
 
 
 def test_approval_post_silent_when_url_unset(monkeypatch: pytest.MonkeyPatch) -> None:
