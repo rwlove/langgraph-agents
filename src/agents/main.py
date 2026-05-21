@@ -23,7 +23,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg_pool import AsyncConnectionPool
 
-from agents.api import admin, approval, chat_completions, health, inbox, todos
+from agents.api import admin, approval, auth, chat_completions, health, inbox, todos
 from agents.graphs.fleet import build_fleet_graph
 from agents.idempotency import DedupStore
 from agents.memory_store import MCPMemoryStore, build_pool
@@ -352,6 +352,12 @@ app = FastAPI(
 # rather than inside `lifespan` so it wraps the routes before any
 # request lands.
 instrument_fastapi_app(app)
+
+# Stage 2 — Bearer-token auth for the public `hai.<domain>` ingress.
+# Gates /inbox + /admin/* against settings.hai_cli_token. Short-
+# circuits when the token is unset (dev / local-only mode).
+app.state.hai_cli_token = get_settings().hai_cli_token
+app.middleware("http")(auth.hai_cli_auth_middleware)
 
 app.include_router(health.router)
 app.include_router(inbox.router)
