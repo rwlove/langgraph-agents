@@ -68,11 +68,19 @@ def _approval_request_dict() -> dict[str, Any]:
     }
 
 
-def _set_webhook(monkeypatch: pytest.MonkeyPatch, url: str | None) -> None:
+def _set_webhook(
+    monkeypatch: pytest.MonkeyPatch,
+    url: str | None,
+    token: str | None = None,
+) -> None:
     if url is None:
         monkeypatch.delenv("APPROVAL_POST_WEBHOOK_URL", raising=False)
     else:
         monkeypatch.setenv("APPROVAL_POST_WEBHOOK_URL", url)
+    if token is None:
+        monkeypatch.delenv("APPROVAL_POST_WEBHOOK_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("APPROVAL_POST_WEBHOOK_TOKEN", token)
     get_settings.cache_clear()
 
 
@@ -88,7 +96,7 @@ class _PostRecorder:
     def __init__(self, status_code: int = 200, text: str = "") -> None:
         self._status_code = status_code
         self._text = text
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[str, dict[str, Any], dict[str, str]]] = []
         self.raise_on_post = False
 
     def __call__(self, **_kwargs: Any) -> _PostRecorder:  # AsyncClient(timeout=...)
@@ -100,8 +108,14 @@ class _PostRecorder:
     async def __aexit__(self, *_exc: Any) -> None:
         return None
 
-    async def post(self, url: str, *, json: dict[str, Any]) -> _FakeResponse:
-        self.calls.append((url, json))
+    async def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> _FakeResponse:
+        self.calls.append((url, json, dict(headers or {})))
         if self.raise_on_post:
             raise httpx.ConnectError("simulated")
         return _FakeResponse(self._status_code, self._text)
@@ -121,11 +135,37 @@ def test_approval_post_fires_when_interrupt_present(
     asyncio.run(worker._post_approval_for_interrupts("01J-task"))
 
     assert len(recorder.calls) == 1
-    url, body = recorder.calls[0]
+    url, body, headers = recorder.calls[0]
     assert url == "http://windmill.example/api/approval-post"
     assert body["task_id"] == "01J-task"
-    assert body["approval_request"]["action_class"] == "C"
-    assert body["approval_request"]["proposed_by"] == "ml-operator"
+    # Windmill convention: function args == top-level body keys.
+    # The receiving script expects `paused_for: {approval_request: ...}`.
+    assert body["paused_for"]["approval_request"]["action_class"] == "C"
+    assert body["paused_for"]["approval_request"]["proposed_by"] == "ml-operator"
+    # No token configured in this test → no Authorization header.
+    assert "Authorization" not in headers
+
+
+def test_approval_post_sends_bearer_token_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When APPROVAL_POST_WEBHOOK_TOKEN is set, POST carries Authorization."""
+    _set_webhook(
+        monkeypatch,
+        "http://windmill.example/api/approval-post",
+        token="windmill-secret-token",
+    )
+    recorder = _PostRecorder()
+    monkeypatch.setattr("agents.queue.worker.httpx.AsyncClient", recorder)
+
+    snapshot = _FakeSnapshot([_FakeGraphTask([_FakeInterrupt(_approval_request_dict())])])
+    worker = _build_worker(_FakeGraph(snapshot))
+
+    asyncio.run(worker._post_approval_for_interrupts("01J-task"))
+
+    assert len(recorder.calls) == 1
+    _url, _body, headers = recorder.calls[0]
+    assert headers["Authorization"] == "Bearer windmill-secret-token"
 
 
 def test_approval_post_silent_when_url_unset(monkeypatch: pytest.MonkeyPatch) -> None:

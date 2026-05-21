@@ -254,8 +254,18 @@ class Settings(BaseSettings):
         description=(
             "URL the queue worker POSTs ApprovalRequest payloads to when a "
             "graph interrupt() pauses for human approval. POST body shape: "
-            '{"task_id": str, "approval_request": {...}}. Best-effort — '
-            "failures log but do not raise."
+            '{"task_id": str, "paused_for": {"approval_request": {...}}} — '
+            "Windmill convention (function args == top-level body keys). "
+            "Best-effort — failures log but do not raise."
+        ),
+    )
+    approval_post_webhook_token: str | None = Field(
+        default=None,
+        description=(
+            "Optional Bearer token for the approval-post webhook. When set, "
+            "sent as `Authorization: Bearer <token>`. Required by Windmill's "
+            "`run/p/` endpoint in the cluster — same `windmill_webhook_token` "
+            "alertmanager uses to call alertmanager-holmesgpt-notify."
         ),
     )
 

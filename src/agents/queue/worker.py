@@ -241,10 +241,29 @@ class QueueWorker:
         if approval_request is None:
             return
 
-        payload = {"task_id": task_id, "approval_request": approval_request}
+        # Windmill convention: function args == top-level body keys. The
+        # receiving `langgraph-approval-post` script has signature
+        # ``main(task_id, paused_for: {approval_request: ...})`` — match
+        # it, and keep the same `paused_for` shape the synchronous
+        # /inbox returned in v0.2.x so any future callers that reused
+        # that shape stay compatible.
+        payload = {
+            "task_id": task_id,
+            "paused_for": {"approval_request": approval_request},
+        }
+        # Windmill's `run/p/` endpoint requires auth. The standard pattern
+        # in this cluster (cf. alertmanagerconfig.yaml's HolmesGPT route)
+        # is `Authorization: Bearer <windmill_webhook_token>`. Header is
+        # only sent when the token is configured; URL-only deployments
+        # (test fixtures, future endpoints that don't need auth) still
+        # work.
+        headers: dict[str, str] = {}
+        if settings.approval_post_webhook_token:
+            headers["Authorization"] = f"Bearer {settings.approval_post_webhook_token}"
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(webhook_url, json=payload)
+                resp = await client.post(webhook_url, json=payload, headers=headers)
         except Exception:
             logger.exception("approval-post: webhook call failed task=%s", task_id)
             return
