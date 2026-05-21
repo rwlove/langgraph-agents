@@ -88,11 +88,23 @@ def send_dm(
         "content": content,
     }
 
+    # When `zulip_base_url` overrides the public hostname for routing
+    # (cluster-internal Service URL), Zulip's Django backend still
+    # checks Host against ALLOWED_HOSTS — which lists the public
+    # hostname, not the in-cluster Service name. Without this override
+    # the request gets Django's bare 400 HTML page. Set Host explicitly
+    # so the public hostname appears in the request even though the
+    # TCP connection terminates at the in-cluster Service.
+    headers: dict[str, str] = {}
+    if settings.zulip_base_url and settings.zulip_host:
+        headers["Host"] = settings.zulip_host
+
     try:
         resp = httpx.post(
             url,
             auth=auth,
             data=data,
+            headers=headers,
             timeout=timeout_seconds,
         )
     except httpx.HTTPError as exc:
