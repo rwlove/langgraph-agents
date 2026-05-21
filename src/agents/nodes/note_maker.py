@@ -98,8 +98,20 @@ def note_maker_node(state: FleetState) -> dict[str, Any]:
     markdown = _render_markdown(draft, task_id=state.task_id, source_hint=state.source)
     result = write_draft(state.task_id, markdown, kind="note")
 
+    # The `output` field is what gets posted back into the originating
+    # surface (e.g. the triager-bot reply DM for source=zulip tasks).
+    # A bare "note drafted: <path>" string was useful for log scraping
+    # but unreadable in chat — the human-in-the-loop has to context-
+    # switch into Obsidian / their shell to see what the agent
+    # actually produced.
+    #
+    # Emit the drafted body so the chat reply *is* the note. Footer
+    # keeps the vault path for follow-up (move/edit/promote) while
+    # the body answers "what did the agent do?" in line.
     return {
         "output": (
-            f"note drafted: {result.path} ({result.bytes_written} bytes, domain={draft.domain})"
+            f"📝 _note drafted ({draft.domain})_\n\n"
+            f"{markdown}\n\n"
+            f"_(saved: `{result.path}`, {result.bytes_written} bytes)_"
         ),
     }
