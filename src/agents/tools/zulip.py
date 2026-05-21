@@ -68,7 +68,16 @@ def send_dm(
             "for /inbox to post replies back to Zulip."
         )
 
-    url = f"https://{settings.zulip_host}/api/v1/messages"
+    # Prefer the explicit base URL when set — needed in clusters where
+    # the public Zulip hostname resolves to an LB IP pods can't reach
+    # (Cilium kube-proxy-replacement / split-horizon DNS). Falls back to
+    # `https://{zulip_host}` for the legacy host-only configuration.
+    base_url = (
+        settings.zulip_base_url.rstrip("/")
+        if settings.zulip_base_url
+        else f"https://{settings.zulip_host}"
+    )
+    url = f"{base_url}/api/v1/messages"
     # Zulip's REST API uses HTTP Basic auth: <bot_email>:<api_key>.
     # type=direct + to=[user_id] sends a DM that lands in the existing
     # 1:1 thread with that user (same thread the bot was DM'd from).

@@ -157,6 +157,19 @@ class Settings(BaseSettings):
         default=None,
         description="Zulip realm host (e.g. chat.thesteamedcrab.com). No scheme.",
     )
+    zulip_base_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional full base URL for the Zulip API (e.g. "
+            "`http://zulip.collab.svc.cluster.local`). When set, "
+            "overrides the implicit `https://{zulip_host}`. Required in "
+            "this cluster because `chat.${SECRET_DOMAIN}` resolves via "
+            "split-horizon DNS to an external LB IP that pods can't "
+            "reach (Cilium kube-proxy-replacement quirk) — point this "
+            "at the cluster-internal Service URL instead. Leave the "
+            "host field set for log/diagnostic clarity."
+        ),
+    )
     zulip_triager_email: str | None = Field(default=None)
     zulip_triager_api_key: str | None = Field(default=None)
 
