@@ -27,10 +27,19 @@ def _read_paused_gauge(is_stale: str) -> float:
 
 
 def _make_app_with_graph(temp_vault: Path) -> FastAPI:
-    """Build a FastAPI app with the admin router + a mock graph attribute."""
+    """Build a FastAPI app with the admin router + a mock graph attribute.
+
+    Sets both `graph` and `admin_graph` to None — tests assign per-case.
+    Endpoints split between the two: read paths (`GET /admin/tasks`,
+    `GET /admin/tasks/<id>`) read from `admin_graph`; write paths
+    (`POST .../timeout-tier`, `.../cancel`) and the `paused-threads`
+    sweep stay on `graph`.
+    """
     app = FastAPI()
     app.include_router(admin.router)
     app.state.graph = None  # set per-test via fixture
+    app.state.admin_graph = None
+    app.state.queue_pool = None
     return app
 
 
@@ -276,6 +285,100 @@ def test_paused_threads_skips_threads_without_interrupts(
         r = client.get("/admin/paused-threads")
         assert r.status_code == 200
         assert r.json() == []
+
+
+def test_list_tasks_uses_admin_graph(temp_vault: Path) -> None:
+    """`GET /admin/tasks` MUST read from `app.state.admin_graph`, not `graph`.
+
+    The whole point of the dedicated admin saver is that the read path
+    can't be blocked by the main checkpointer's lock. If a refactor
+    accidentally points `list_tasks` back at `state.graph`, the
+    contention bug returns silently.
+    """
+    cp = MagicMock()
+    cp.config = {"configurable": {"thread_id": "t-admin"}}
+
+    async def _alist(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+        yield cp
+
+    interrupt = MagicMock()
+    interrupt.id = "ix-1"
+    interrupt.value = {"reason": "test"}
+    task = MagicMock()
+    task.interrupts = [interrupt]
+    snap = MagicMock()
+    snap.tasks = [task]
+    snap.values = {
+        "target_agent": "coder",
+        "awaiting_user_since": "2026-05-21T12:00:00+00:00",
+        "timeout_tier": None,
+    }
+
+    admin_graph = MagicMock()
+    admin_graph.checkpointer = MagicMock()
+    admin_graph.checkpointer.alist = MagicMock(side_effect=lambda *a, **kw: _alist())
+    admin_graph.aget_state = AsyncMock(return_value=snap)
+
+    # `state.graph` left as a sentinel that, if accidentally used, raises.
+    sentinel_main = MagicMock()
+    sentinel_main.checkpointer = MagicMock()
+    sentinel_main.checkpointer.alist = MagicMock(
+        side_effect=AssertionError("list_tasks must not touch state.graph")
+    )
+
+    app = _make_app_with_graph(temp_vault)
+    app.state.graph = sentinel_main
+    app.state.admin_graph = admin_graph
+    with TestClient(app) as client:
+        r = client.get("/admin/tasks")
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body) == 1
+        assert body[0]["task_id"] == "t-admin"
+        assert body[0]["target_agent"] == "coder"
+        assert body[0]["interrupts"][0]["id"] == "ix-1"
+
+
+def test_list_tasks_503_when_admin_graph_missing(temp_vault: Path) -> None:
+    """No admin graph on app.state → 503 with an explicit error."""
+    app = _make_app_with_graph(temp_vault)
+    # Both graphs stay None (set by _make_app_with_graph).
+    with TestClient(app) as client:
+        r = client.get("/admin/tasks")
+        assert r.status_code == 503
+        assert "admin graph" in r.json()["detail"]
+
+
+def test_get_task_checkpointer_uses_admin_graph(temp_vault: Path) -> None:
+    """`GET /admin/tasks/<id>` checkpointer read uses `admin_graph`."""
+    interrupt = MagicMock()
+    interrupt.id = "ix-9"
+    interrupt.value = {"reason": "test"}
+    task = MagicMock()
+    task.interrupts = [interrupt]
+    snap = MagicMock()
+    snap.tasks = [task]
+    snap.values = {"target_agent": "coder"}
+    snap.next = ("supervisor",)
+
+    admin_graph = MagicMock()
+    admin_graph.aget_state = AsyncMock(return_value=snap)
+
+    sentinel_main = MagicMock()
+    sentinel_main.aget_state = AsyncMock(
+        side_effect=AssertionError("get_task must not touch state.graph"),
+    )
+
+    app = _make_app_with_graph(temp_vault)
+    app.state.graph = sentinel_main
+    app.state.admin_graph = admin_graph
+    with TestClient(app) as client:
+        r = client.get("/admin/tasks/t-9")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["task_id"] == "t-9"
+        assert body["checkpointer"]["values"] == {"target_agent": "coder"}
+        assert body["checkpointer"]["interrupts"][0]["id"] == "ix-9"
 
 
 def test_costs_today_tolerates_malformed_log(temp_vault: Path) -> None:

@@ -240,6 +240,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         checkpointer = await _build_checkpointer(stack)
         store = await _build_store(stack, settings)
         app.state.graph = build_fleet_graph(checkpointer=checkpointer, store=store)
+
+        # `/admin/tasks` (and `/admin/tasks/<id>` reads) walk the
+        # checkpointer N+1 times per call, and every checkpointer call
+        # serializes through `AsyncPostgresSaver`'s instance-scoped
+        # `asyncio.Lock` (langgraph 0.x — `checkpoint/postgres/aio.py`
+        # line 43). If a single dispatch-path call is hung (e.g. a
+        # paused-for-user write waiting on a long Postgres conn), the
+        # admin scan also hangs — the 30s timeout in the Windmill
+        # awaiting-user-sweep script then fires every 5 minutes,
+        # masking what should be a fast read.
+        #
+        # Compiling a second graph with its own dedicated checkpointer
+        # (own pool, own Lock) gives admin scans a lock-independent
+        # path. Two compiled graphs share the same DB tables, so they
+        # see each other's writes; the isolation is purely in-process
+        # mutex contention.
+        #
+        # Read-only admin endpoints use this; mutating ones
+        # (`POST /admin/tasks/<id>/timeout-tier`, `.../cancel`) stay on
+        # the main graph since their writes need to be coherent with
+        # the dispatch path's view.
+        admin_checkpointer = await _build_checkpointer(stack)
+        app.state.admin_graph = build_fleet_graph(
+            checkpointer=admin_checkpointer, store=None
+        )
         # Phase 3.G: idempotency dedup store backed by Dragonfly.
         # Constructed lazily — first connect happens on first /inbox
         # request that carries an `idempotency_key`. Closed on shutdown
