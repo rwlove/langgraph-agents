@@ -23,7 +23,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg_pool import AsyncConnectionPool
 
-from agents.api import admin, approval, chat_completions, health, inbox
+from agents.api import admin, approval, chat_completions, health, inbox, todos
 from agents.graphs.fleet import build_fleet_graph
 from agents.idempotency import DedupStore
 from agents.memory_store import MCPMemoryStore, build_pool
@@ -357,6 +357,7 @@ app.include_router(health.router)
 app.include_router(inbox.router)
 app.include_router(approval.router)
 app.include_router(admin.router)
+app.include_router(todos.router)
 app.include_router(chat_completions.router)
 
 

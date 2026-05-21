@@ -72,7 +72,7 @@ Mode = Literal["architect", "debugger", "optimizer", "default"]
 
 ActionClass = Literal["A", "B", "C", "D"]
 
-Source = Literal["voice", "zulip", "text", "holmesgpt", "test", "openwebui"]
+Source = Literal["voice", "zulip", "text", "holmesgpt", "test", "openwebui", "cli"]
 
 TimeoutTier = Literal["30min", "4h", "7d"]
 
