@@ -105,7 +105,12 @@ class TaskQueue:
                 """,
                 (task_id, json.dumps(envelope), ttl_expires_at),
             )
-            await conn.execute(f"NOTIFY {NOTIFY_CHANNEL}, %s", (task_id,))
+            # `NOTIFY` is a SQL command, not a function, and Postgres's
+            # parser rejects bind parameters in its payload slot
+            # (`syntax error at or near "$1"`). The `pg_notify(text, text)`
+            # function accepts parameters because it's an ordinary
+            # function call. Same wakeup semantics on the LISTEN side.
+            await conn.execute("SELECT pg_notify(%s, %s)", (NOTIFY_CHANNEL, task_id))
 
         slog.info(
             "task_enqueued",

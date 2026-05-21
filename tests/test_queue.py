@@ -73,11 +73,7 @@ def test_migrate_split_statements_handles_multi_statement_file() -> None:
     checkpointer pool's prepare_threshold=0) doesn't choke on the
     multi-statement form.
     """
-    sql = (
-        resources.files("agents.queue.migrations")
-        .joinpath("001_task_queue.sql")
-        .read_text()
-    )
+    sql = resources.files("agents.queue.migrations").joinpath("001_task_queue.sql").read_text()
     stmts = _split_statements(sql)
     # Real shape: 2 CREATE TABLE + 3 CREATE INDEX + 1 CREATE UNIQUE INDEX
     # + 2 COMMENT ON TABLE = 8 statements (give or take if the file is
@@ -89,6 +85,18 @@ def test_migrate_split_statements_handles_multi_statement_file() -> None:
     assert all(not s.startswith("--") for s in stmts)
     # First statement should be the CREATE TABLE task_queue.
     assert "CREATE TABLE IF NOT EXISTS task_queue" in stmts[0]
+
+
+def test_enqueue_uses_pg_notify_function_not_command() -> None:
+    """`NOTIFY <channel>, $1` is rejected by the Postgres parser — bind
+    parameters can only flow into ``pg_notify(text, text)``. Pin the SQL
+    shape so a future edit doesn't regress to the broken form.
+    """
+    src = resources.files("agents.queue").joinpath("store.py").read_text()
+    assert "pg_notify" in src, "enqueue should call pg_notify() — not the NOTIFY command"
+    # The broken form would look like `NOTIFY {NOTIFY_CHANNEL}, %s`.
+    assert "NOTIFY {NOTIFY_CHANNEL}" not in src
+    assert "NOTIFY {channel}" not in src
 
 
 def test_migrate_split_statements_strips_comment_lines() -> None:
