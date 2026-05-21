@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field
 from ulid import ULID
 
@@ -67,7 +68,7 @@ class Todo(BaseModel):
 # ---------- Helpers ----------
 
 
-def _row_to_todo(row: tuple) -> Todo:
+def _row_to_todo(row: tuple[Any, ...]) -> Todo:
     """Map a SELECT * row into a Todo model."""
     return Todo(
         id=row[0],
@@ -82,11 +83,11 @@ def _row_to_todo(row: tuple) -> Todo:
     )
 
 
-def _require_pool(request: Request):
+def _require_pool(request: Request) -> AsyncConnectionPool:
     pool = request.app.state.queue_pool
     if pool is None:
         raise HTTPException(status_code=503, detail="queue pool not initialized")
-    return pool
+    return pool  # type: ignore[no-any-return]
 
 
 # ---------- Endpoints ----------
