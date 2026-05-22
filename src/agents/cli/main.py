@@ -124,12 +124,97 @@ def _tail(client: HaiClient, cfg: Config, task_id: str) -> None:
     sys.exit(1)
 
 
-def cmd_task_ls(_args: argparse.Namespace) -> None:
+_PHASE_RUNNING = "running"
+_PHASE_AWAITING = "awaiting"
+_PHASE_COMPLETE = "complete"
+_PHASE_FAILED = "failed"
+_PHASE_PENDING = "pending"
+_PHASE_UNKNOWN = "?"
+
+
+def _task_phase(task: dict[str, Any]) -> str:
+    """Collapse queue_status + interrupts + awaiting_user_since into one label.
+
+    The queue lifecycle and the graph lifecycle are orthogonal: a task
+    can be queue-status=done while the graph is paused at an
+    `interrupt()` waiting for the user. From the user's view, that's
+    `awaiting`, not `complete` — and that's the bug the table format
+    is here to fix.
+    """
+    interrupts = task.get("interrupts") or []
+    awaiting_since = task.get("awaiting_user_since")
+    if interrupts or awaiting_since:
+        return _PHASE_AWAITING
+    qs = task.get("queue_status") or ""
+    if qs == "pending":
+        return _PHASE_PENDING
+    if qs == "claimed":
+        return _PHASE_RUNNING
+    if qs == "done":
+        return _PHASE_COMPLETE
+    if qs in ("failed", "dlq"):
+        return _PHASE_FAILED
+    return _PHASE_UNKNOWN
+
+
+def _truncate(s: str, n: int) -> str:
+    s = (s or "").splitlines()[0] if s else ""
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _render_task_table(tasks: list[dict[str, Any]]) -> None:
+    if not tasks:
+        print("(no tasks)")
+        return
+    print(f"{'TASK_ID':30s}  {'PHASE':9s}  {'AGENT':22s}  CONTENT")
+    for t in tasks:
+        tid = (t.get("task_id") or "?")[:30]
+        phase = _task_phase(t)
+        agent = (t.get("target_agent") or "—")[:22]
+        content = _truncate(t.get("content") or "", 70)
+        print(f"{tid:30s}  {phase:9s}  {agent:22s}  {content}")
+
+
+def _fetch_tasks(client: HaiClient) -> list[dict[str, Any]]:
+    resp = client.request("GET", "/admin/tasks")
+    assert isinstance(resp, list)
+    return resp
+
+
+def cmd_task_ls(args: argparse.Namespace) -> None:
     cfg = load_config()
     _need_token(cfg)
     with HaiClient(cfg) as client:
-        resp = client.request("GET", "/admin/tasks")
-        _print_json(resp)
+        tasks = _fetch_tasks(client)
+    if args.json:
+        _print_json(tasks)
+        return
+    _render_task_table(tasks)
+
+
+def cmd_awaiting(args: argparse.Namespace) -> None:
+    """Show only the tasks needing the user's input — the highest-signal view."""
+    cfg = load_config()
+    _need_token(cfg)
+    with HaiClient(cfg) as client:
+        tasks = [t for t in _fetch_tasks(client) if _task_phase(t) == _PHASE_AWAITING]
+    if args.json:
+        _print_json(tasks)
+        return
+    _render_task_table(tasks)
+
+
+def cmd_completed(args: argparse.Namespace) -> None:
+    """Show tasks the agents finished (queue done, no pending interrupt)."""
+    cfg = load_config()
+    _need_token(cfg)
+    with HaiClient(cfg) as client:
+        tasks = [t for t in _fetch_tasks(client) if _task_phase(t) == _PHASE_COMPLETE]
+    tasks = tasks[: args.limit]
+    if args.json:
+        _print_json(tasks)
+        return
+    _render_task_table(tasks)
 
 
 def cmd_task_show(args: argparse.Namespace) -> None:
@@ -246,12 +331,32 @@ def _build_parser() -> argparse.ArgumentParser:
     p_task_tail.add_argument("task_id")
     p_task_tail.set_defaults(func=cmd_task_tail)
 
-    p_task_ls = s_task.add_parser("ls", help="list recent tasks")
+    p_task_ls = s_task.add_parser("ls", help="list recent tasks (table format)")
+    p_task_ls.add_argument(
+        "--json", action="store_true", help="emit raw JSON instead of the table"
+    )
     p_task_ls.set_defaults(func=cmd_task_ls)
 
     p_task_show = s_task.add_parser("show", help="show one task's full state")
     p_task_show.add_argument("task_id")
     p_task_show.set_defaults(func=cmd_task_show)
+
+    # awaiting — tasks paused for the user's input
+    p_awaiting = sub.add_parser(
+        "awaiting", help="show only tasks needing user input (interrupts)"
+    )
+    p_awaiting.add_argument("--json", action="store_true", help="emit raw JSON")
+    p_awaiting.set_defaults(func=cmd_awaiting)
+
+    # completed — what the agents finished
+    p_completed = sub.add_parser(
+        "completed", help="show only completed tasks (queue done, no pending interrupt)"
+    )
+    p_completed.add_argument(
+        "--limit", type=int, default=20, help="max rows to show (default 20)"
+    )
+    p_completed.add_argument("--json", action="store_true", help="emit raw JSON")
+    p_completed.set_defaults(func=cmd_completed)
 
     # todo
     p_todo = sub.add_parser("todo", help="durable todo store")
