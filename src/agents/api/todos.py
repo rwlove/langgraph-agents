@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field
 from ulid import ULID
@@ -106,7 +107,7 @@ async def create_todo(body: TodoCreate, request: Request) -> Todo:
             RETURNING id, body, status, created_by, tags, metadata,
                       created_at, updated_at, closed_at
             """,
-            (todo_id, body.body, body.tags, body.metadata),
+            (todo_id, body.body, body.tags, Jsonb(body.metadata)),
         )
         row = await cur.fetchone()
     assert row is not None  # INSERT … RETURNING never empty
@@ -186,7 +187,7 @@ async def update_todo(todo_id: str, body: TodoUpdate, request: Request) -> Todo:
         params.append(body.tags)
     if body.metadata is not None:
         sets.append("metadata = %s")
-        params.append(body.metadata)
+        params.append(Jsonb(body.metadata))
     if len(sets) == 1:
         # Only the auto-updated_at set; treat as no-op so the caller
         # gets a clear signal vs. silently bumping the timestamp.
