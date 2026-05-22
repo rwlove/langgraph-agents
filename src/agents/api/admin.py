@@ -76,6 +76,24 @@ async def list_tasks(request: Request) -> list[dict[str, Any]]:
         if thread_id:
             seen.add(thread_id)
 
+    # Pre-fetch envelope + queue status from task_queue for every known
+    # thread so the listing carries the originating prompt content
+    # (Stage 2 dogfooding fix — `task_id` alone is unmappable to "what
+    # I asked"). Single SELECT for the whole set rather than N
+    # round-trips inside the per-thread loop below.
+    envelope_by_id: dict[str, dict[str, Any]] = {}
+    queue_status_by_id: dict[str, str] = {}
+    pool = request.app.state.queue_pool
+    if pool is not None and seen:
+        async with pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                "SELECT id, envelope, status FROM task_queue WHERE id = ANY(%s)",
+                (list(seen),),
+            )
+            async for row in cur:
+                envelope_by_id[row[0]] = row[1] or {}
+                queue_status_by_id[row[0]] = row[2]
+
     # Phase 2 — aget_state per thread. Each call acquires + releases
     # the saver lock independently, so no self-deadlock. Sequential
     # rather than gathered because every call serializes through the
@@ -89,6 +107,7 @@ async def list_tasks(request: Request) -> list[dict[str, Any]]:
             for i in t.interrupts
         ]
         values = snapshot.values or {}
+        envelope = envelope_by_id.get(thread_id, {})
         out.append(
             {
                 "task_id": thread_id,
@@ -96,8 +115,20 @@ async def list_tasks(request: Request) -> list[dict[str, Any]]:
                 "awaiting_user_since": values.get("awaiting_user_since"),
                 "timeout_tier": values.get("timeout_tier"),
                 "interrupts": interrupts,
+                # Originating prompt context — sourced from the queue
+                # envelope. Empty strings when the task pre-dates the
+                # queue substrate (Phase <4.M1 checkpointer-only tasks).
+                "content": envelope.get("content") or "",
+                "source": envelope.get("source") or "",
+                "user": envelope.get("user") or "",
+                "queue_status": queue_status_by_id.get(thread_id, ""),
             }
         )
+    # Stable order: newest-claimed first (paused-for-user surface) by
+    # falling back on task_id ULID's lexicographic ordering, which is
+    # monotonic. Lets the CLI render a recent-first table without a
+    # separate sort key on the wire.
+    out.sort(key=lambda t: str(t["task_id"]), reverse=True)
     return out
 
 
