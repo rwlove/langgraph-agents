@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import socket
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -110,6 +111,8 @@ class QueueWorker:
         """Process one claim: invoke the graph, ack / nack / dlq."""
         envelope = claim.envelope
         task_id = claim.task_id
+        # Wall-clock duration for completion-post notifications.
+        started_monotonic = time.monotonic()
 
         # Per-task contextvars — same shape as /inbox bound when it was
         # synchronous. Per-node binding (agent, ...) happens inside the
@@ -157,9 +160,18 @@ class QueueWorker:
         # fire immediately — without this, the first user-visible
         # signal is the 30-min escalation tier from
         # langgraph-awaiting-user-sweep.ts.
-        await self._post_approval_for_interrupts(task_id)
+        await self._post_approval_for_interrupts(task_id, envelope)
 
         await self._ack_with_result(task_id, output)
+
+        # Completion DM. Skipped implicitly when the graph paused for
+        # approval — pausing produces no `output`, so the `if output:`
+        # check is enough; the approval-post webhook already fired its
+        # own notification. Fire when the task is genuinely finished
+        # (output produced).
+        if output:
+            duration_s = time.monotonic() - started_monotonic
+            await self._post_completion(task_id, envelope, output, duration_s)
 
         # Zulip DM-back if applicable — preserves the synchronous
         # /inbox's behavior so the triager bot keeps replying in DMs.
@@ -204,7 +216,9 @@ class QueueWorker:
         output = final.get("output") if isinstance(final, dict) else None
         return output if isinstance(output, str) else None
 
-    async def _post_approval_for_interrupts(self, task_id: str) -> None:
+    async def _post_approval_for_interrupts(
+        self, task_id: str, envelope: dict[str, Any]
+    ) -> None:
         """POST an ApprovalRequest to the Windmill approval-post webhook
         when the graph paused at ``interrupt()``.
 
@@ -212,6 +226,9 @@ class QueueWorker:
         endpoint independently exposes the checkpointer's interrupts,
         and langgraph-awaiting-user-sweep.ts catches anything missed
         here at the 30-min escalation tier.
+
+        Takes the envelope so the payload can carry the originating
+        prompt (Stage 2 — the Zulip DM card shows "You asked: ...").
         """
         settings = get_settings()
         webhook_url = settings.approval_post_webhook_url
@@ -243,13 +260,15 @@ class QueueWorker:
 
         # Windmill convention: function args == top-level body keys. The
         # receiving `langgraph-approval-post` script has signature
-        # ``main(task_id, paused_for: {approval_request: ...})`` — match
-        # it, and keep the same `paused_for` shape the synchronous
-        # /inbox returned in v0.2.x so any future callers that reused
-        # that shape stay compatible.
+        # ``main(task_id, paused_for: {approval_request: ...}, content?: str)``
+        # — `content` (the originating prompt) was added in the Stage 2
+        # human-readable-card rewrite so the Zulip DM can show
+        # "You asked: ...". Older versions of the workflow ignore the
+        # extra field; new ones use it.
         payload = {
             "task_id": task_id,
             "paused_for": {"approval_request": approval_request},
+            "content": envelope.get("content") or "",
         }
         # Windmill's `run/p/` endpoint requires auth. The standard pattern
         # in this cluster (cf. alertmanagerconfig.yaml's HolmesGPT route)
@@ -281,6 +300,78 @@ class QueueWorker:
                 task_id=task_id,
                 status=resp.status_code,
                 action_class=approval_request.get("action_class"),
+            )
+
+    async def _post_completion(
+        self,
+        task_id: str,
+        envelope: dict[str, Any],
+        output: str,
+        duration_s: float,
+    ) -> None:
+        """POST a completion card to the Windmill completion-post webhook.
+
+        Stage 2 of HomeAIOps stabilization: fire-and-forget DM to Rob
+        when a task finishes successfully, so he doesn't have to poll
+        `hai task ls`. Mirrors `_post_approval_for_interrupts` —
+        best-effort, no exceptions propagate. Skipped when the
+        webhook URL is unset (backward-compat path; pre-Stage 2 home-
+        ops deployments).
+        """
+        settings = get_settings()
+        webhook_url = settings.completion_post_webhook_url
+        if not webhook_url:
+            return
+
+        # Windmill function signature:
+        #   main(task_id, target_agent?, content?, output?, duration_s?)
+        # — top-level body keys map to positional args by name.
+        # target_agent is read from the checkpointer snapshot so a
+        # truthful "which agent finished" value is always present, not
+        # whatever was in the envelope hint (the supervisor may have
+        # routed differently than the requester guessed).
+        target_agent: str | None = None
+        try:
+            snapshot = await self._graph.aget_state(
+                {"configurable": {"thread_id": task_id}}
+            )
+            if snapshot and snapshot.values:
+                target_agent = snapshot.values.get("target_agent")
+        except Exception:
+            logger.exception("completion-post: aget_state failed task=%s", task_id)
+
+        payload = {
+            "task_id": task_id,
+            "target_agent": target_agent or "",
+            "content": envelope.get("content") or "",
+            "output": output,
+            "duration_s": round(duration_s, 1),
+        }
+        headers: dict[str, str] = {}
+        if settings.completion_post_webhook_token:
+            headers["Authorization"] = f"Bearer {settings.completion_post_webhook_token}"
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(webhook_url, json=payload, headers=headers)
+        except Exception:
+            logger.exception("completion-post: webhook call failed task=%s", task_id)
+            return
+
+        if resp.status_code >= 400:
+            logger.warning(
+                "completion-post: webhook %d task=%s body=%.200s",
+                resp.status_code,
+                task_id,
+                resp.text,
+            )
+        else:
+            slog.info(
+                "completion_post",
+                task_id=task_id,
+                status=resp.status_code,
+                duration_s=duration_s,
+                target_agent=target_agent,
             )
 
     async def _ack_with_result(self, task_id: str, output: str | None) -> None:
