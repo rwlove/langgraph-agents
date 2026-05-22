@@ -292,6 +292,33 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- completion-post webhook (Stage 2 dogfooding) ---
+    # When a task transitions to ``status='done'`` in the queue, the
+    # worker POSTs a completion card payload to this URL. The Windmill
+    # workflow on the other end (``f/lovenet/langgraph-completion-post``)
+    # DMs Rob with a human-readable summary: which agent finished,
+    # the original prompt, the output, the duration.
+    #
+    # Unset disables the worker-side post — pre-stage-2 behavior
+    # (operator polls /admin/tasks or uses `hai task tail`).
+    completion_post_webhook_url: str | None = Field(
+        default=None,
+        description=(
+            "URL the queue worker POSTs completion payloads to when a task "
+            "transitions to status=done. POST body shape: "
+            '{"task_id": str, "target_agent": str, "content": str, "output": str, '
+            '"duration_s": float}. Best-effort — failures log but do not raise.'
+        ),
+    )
+    completion_post_webhook_token: str | None = Field(
+        default=None,
+        description=(
+            "Optional Bearer token for the completion-post webhook. Same "
+            "shape as approval_post_webhook_token; reuses the same Windmill "
+            "webhook token in production."
+        ),
+    )
+
     # --- runtime ---
     log_level: str = "INFO"
     user_timezone: str = "America/New_York"

@@ -132,7 +132,7 @@ def test_approval_post_fires_when_interrupt_present(
     snapshot = _FakeSnapshot([_FakeGraphTask([_FakeInterrupt(_approval_request_dict())])])
     worker = _build_worker(_FakeGraph(snapshot))
 
-    asyncio.run(worker._post_approval_for_interrupts("01J-task"))
+    asyncio.run(worker._post_approval_for_interrupts("01J-task", {"content": "test prompt"}))
 
     assert len(recorder.calls) == 1
     url, body, headers = recorder.calls[0]
@@ -161,7 +161,7 @@ def test_approval_post_sends_bearer_token_when_configured(
     snapshot = _FakeSnapshot([_FakeGraphTask([_FakeInterrupt(_approval_request_dict())])])
     worker = _build_worker(_FakeGraph(snapshot))
 
-    asyncio.run(worker._post_approval_for_interrupts("01J-task"))
+    asyncio.run(worker._post_approval_for_interrupts("01J-task", {"content": "test prompt"}))
 
     assert len(recorder.calls) == 1
     _url, _body, headers = recorder.calls[0]
@@ -178,7 +178,7 @@ def test_approval_post_silent_when_url_unset(monkeypatch: pytest.MonkeyPatch) ->
     graph = _FakeGraph(snapshot)
     worker = _build_worker(graph)
 
-    asyncio.run(worker._post_approval_for_interrupts("01J-task"))
+    asyncio.run(worker._post_approval_for_interrupts("01J-task", {"content": "test prompt"}))
 
     assert recorder.calls == []
     # aget_state should not have been called either — short-circuited at the URL check.
@@ -194,7 +194,7 @@ def test_approval_post_silent_when_no_interrupts(monkeypatch: pytest.MonkeyPatch
     snapshot = _FakeSnapshot([_FakeGraphTask([])])  # task present, no interrupts
     worker = _build_worker(_FakeGraph(snapshot))
 
-    asyncio.run(worker._post_approval_for_interrupts("01J-task"))
+    asyncio.run(worker._post_approval_for_interrupts("01J-task", {"content": "test prompt"}))
 
     assert recorder.calls == []
 
@@ -210,7 +210,7 @@ def test_approval_post_silent_for_non_approval_interrupt(
     snapshot = _FakeSnapshot([_FakeGraphTask([_FakeInterrupt({"some_other_shape": True})])])
     worker = _build_worker(_FakeGraph(snapshot))
 
-    asyncio.run(worker._post_approval_for_interrupts("01J-task"))
+    asyncio.run(worker._post_approval_for_interrupts("01J-task", {"content": "test prompt"}))
 
     assert recorder.calls == []
 
@@ -228,7 +228,7 @@ def test_approval_post_does_not_raise_on_webhook_error(
     worker = _build_worker(_FakeGraph(snapshot))
 
     # Should NOT raise.
-    asyncio.run(worker._post_approval_for_interrupts("01J-task"))
+    asyncio.run(worker._post_approval_for_interrupts("01J-task", {"content": "test prompt"}))
 
 
 def test_approval_post_does_not_raise_on_aget_state_error(
@@ -246,7 +246,7 @@ def test_approval_post_does_not_raise_on_aget_state_error(
     worker = _build_worker(_ExplodingGraph())  # type: ignore[arg-type]
 
     # Should NOT raise.
-    asyncio.run(worker._post_approval_for_interrupts("01J-task"))
+    asyncio.run(worker._post_approval_for_interrupts("01J-task", {"content": "test prompt"}))
 
     # And no POST should have happened.
     assert recorder.calls == []
