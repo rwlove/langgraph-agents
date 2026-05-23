@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from agents.llm import llm
 from agents.personas import load_persona
+from agents.settings import get_settings
 from agents.state import ActionClass, AgentId, ApprovalRequest, FleetState
 from agents.tools.obsidian import write_draft
 
@@ -193,6 +194,25 @@ def _render_markdown(finding: SmartHomeFinding, task_id: str) -> str:
     )
 
 
+def _load_intent_map() -> str:
+    """Load the smart-home device intent map YAML for inclusion in the prompt.
+
+    The intent map carries the SEMANTIC layer on top of HA's auto-discoverable
+    data — HACS integration opinions, critical-device context, device-class
+    severity. See `agents/workspaces/smart-home-operator/device-intent-map.yaml`.
+
+    Falls back to empty string if the file doesn't exist or is empty. The
+    agent still works — it just lacks the semantic context for critical /
+    non-obvious devices.
+    """
+    settings = get_settings()
+    path = settings.workspaces_dir / _AGENT_ID / "device-intent-map.yaml"
+    if not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8").strip()
+    return text
+
+
 def smart_home_operator_node(state: FleetState) -> dict[str, Any]:
     """Analyze + propose for any HA / smart-home request.
 
@@ -211,11 +231,22 @@ def smart_home_operator_node(state: FleetState) -> dict[str, Any]:
             f"- summary: {state.triage.summary}\n"
         )
 
+    intent_map = _load_intent_map()
+    intent_context = ""
+    if intent_map:
+        intent_context = (
+            "\n\nDEVICE INTENT MAP (hand-maintained semantic layer — refer "
+            "to this for HACS integration opinions, critical-device meaning, "
+            "and device-class severity. Treat as authoritative over generic "
+            "HA defaults.):\n\n"
+            f"```yaml\n{intent_map}\n```\n"
+        )
+
     messages = [
         SystemMessage(content=persona),
         HumanMessage(
             content=(
-                f"REQUEST:\n\n{state.content}{triage_hint}\n\n"
+                f"REQUEST:\n\n{state.content}{triage_hint}{intent_context}\n\n"
                 "Produce a SmartHomeFinding. Prime directive: you cannot "
                 "break Home Assistant. Run the eight-clause execution gate "
                 "before choosing action_class C. Reference HA entity IDs + "
