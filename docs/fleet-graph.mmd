@@ -1,0 +1,107 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	triager(triager)
+	historian(historian)
+	note-maker(note-maker)
+	researcher(researcher)
+	coder(coder)
+	errand-runner(errand-runner)
+	supervisor(supervisor)
+	reviewer(reviewer)
+	homelab-engineer(homelab-engineer)
+	network-operator(network-operator)
+	storage-operator(storage-operator)
+	smart-home-operator(smart-home-operator)
+	ml-operator(ml-operator)
+	observability-operator(observability-operator)
+	health-tracker(health-tracker)
+	property-coordinator(property-coordinator)
+	doc-writer(doc-writer)
+	reporter(reporter)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> triager;
+	coder -.-> errand-runner;
+	coder -. &nbsp;__end__&nbsp; .-> reporter;
+	coder -.-> supervisor;
+	doc-writer -.-> errand-runner;
+	doc-writer -. &nbsp;__end__&nbsp; .-> reporter;
+	doc-writer -.-> supervisor;
+	errand-runner --> reporter;
+	health-tracker -.-> errand-runner;
+	health-tracker -. &nbsp;__end__&nbsp; .-> reporter;
+	health-tracker -.-> supervisor;
+	historian -.-> errand-runner;
+	historian -. &nbsp;__end__&nbsp; .-> reporter;
+	historian -.-> supervisor;
+	homelab-engineer -.-> errand-runner;
+	homelab-engineer -. &nbsp;__end__&nbsp; .-> reporter;
+	homelab-engineer -.-> supervisor;
+	ml-operator -.-> errand-runner;
+	ml-operator -. &nbsp;__end__&nbsp; .-> reporter;
+	ml-operator -.-> supervisor;
+	network-operator -.-> errand-runner;
+	network-operator -. &nbsp;__end__&nbsp; .-> reporter;
+	network-operator -.-> supervisor;
+	note-maker -.-> errand-runner;
+	note-maker -. &nbsp;__end__&nbsp; .-> reporter;
+	note-maker -.-> supervisor;
+	observability-operator -.-> errand-runner;
+	observability-operator -. &nbsp;__end__&nbsp; .-> reporter;
+	observability-operator -.-> supervisor;
+	property-coordinator -.-> errand-runner;
+	property-coordinator -. &nbsp;__end__&nbsp; .-> reporter;
+	property-coordinator -.-> supervisor;
+	researcher -.-> errand-runner;
+	researcher -. &nbsp;__end__&nbsp; .-> reporter;
+	researcher -.-> supervisor;
+	reviewer -.-> errand-runner;
+	reviewer -. &nbsp;__end__&nbsp; .-> reporter;
+	reviewer -.-> supervisor;
+	smart-home-operator -.-> errand-runner;
+	smart-home-operator -. &nbsp;__end__&nbsp; .-> reporter;
+	smart-home-operator -.-> supervisor;
+	storage-operator -.-> errand-runner;
+	storage-operator -. &nbsp;__end__&nbsp; .-> reporter;
+	storage-operator -.-> supervisor;
+	supervisor -.-> coder;
+	supervisor -.-> doc-writer;
+	supervisor -.-> errand-runner;
+	supervisor -.-> health-tracker;
+	supervisor -.-> historian;
+	supervisor -.-> homelab-engineer;
+	supervisor -.-> ml-operator;
+	supervisor -.-> network-operator;
+	supervisor -.-> note-maker;
+	supervisor -.-> observability-operator;
+	supervisor -.-> property-coordinator;
+	supervisor -. &nbsp;__end__&nbsp; .-> reporter;
+	supervisor -.-> researcher;
+	supervisor -.-> reviewer;
+	supervisor -.-> smart-home-operator;
+	supervisor -.-> storage-operator;
+	triager -.-> coder;
+	triager -.-> doc-writer;
+	triager -.-> errand-runner;
+	triager -.-> health-tracker;
+	triager -.-> historian;
+	triager -.-> homelab-engineer;
+	triager -.-> ml-operator;
+	triager -.-> network-operator;
+	triager -.-> note-maker;
+	triager -.-> observability-operator;
+	triager -.-> property-coordinator;
+	triager -. &nbsp;__end__&nbsp; .-> reporter;
+	triager -.-> researcher;
+	triager -.-> reviewer;
+	triager -.-> smart-home-operator;
+	triager -.-> storage-operator;
+	triager -.-> supervisor;
+	reporter --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
