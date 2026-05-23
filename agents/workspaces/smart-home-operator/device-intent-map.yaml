@@ -1,0 +1,94 @@
+# Smart-home device intent map.
+#
+# Hand-maintained semantic layer on top of HA's auto-discoverable data.
+# HA tells the agent WHAT exists (entities, integrations, areas); this
+# file tells the agent what those things MEAN in this specific home.
+#
+# Loaded by smart-home-operator at task start (see
+# src/agents/nodes/smart_home_operator.py::_load_intent_map). If this
+# file is empty or absent, the agent still works — it just lacks the
+# semantic context for critical / non-obvious devices.
+#
+# Maintenance:
+#   - Update when a new HACS integration installs (~quarterly).
+#   - Update when a new safety-critical device is added (~rarely).
+#   - DO NOT enumerate every dimmer / switch / sensor — the agent infers
+#     those from HA entity name + area + device_class.
+#   - A drift-detect Windmill workflow audits this file weekly against
+#     HA reality and publishes a report to vault.
+
+# ---- HACS integrations ----
+# Auto-discoverable: HA lists every installed integration via
+# `ha_get_integration` + `ha_list_services`. This section adds OPINION
+# on which integration to prefer when multiple paths exist, and which
+# defaults the agent should NOT touch.
+#
+# Schema per entry:
+#   <integration_slug>:
+#     purpose:      one-line summary of what it does
+#     when_to_use:  guidance for when to prefer this integration over alternatives
+#     when_to_avoid: (optional) explicit anti-pattern guidance
+hacs_integrations:
+  # TODO(ADMIN): fill in your installed HACS integrations. Examples below
+  # are illustrative — replace with your actual ones (or delete if not
+  # installed).
+  #
+  # adaptive_lighting:
+  #   purpose: time-of-day brightness/color management for managed lights
+  #   when_to_use: toggle via switch.adaptive_lighting_* groups
+  #   when_to_avoid: setting brightness/color directly on managed lights — adaptive_lighting will override
+  #
+  # frigate:
+  #   purpose: NVR + object detection
+  #   when_to_use: camera events, person/car detection, snapshots via the integration's services
+  #   when_to_avoid: using the camera.* entities directly when Frigate has richer paths
+  #
+  # music_assistant:
+  #   purpose: multi-room music orchestration
+  #   when_to_use: ALWAYS prefer over individual media_player.* if MA owns the speaker
+
+# ---- Critical devices ----
+# Devices where the AGENT needs explicit context beyond what HA exposes —
+# usually because acting on them has out-of-proportion consequences, or
+# the device is on a special integration path that isn't in HA.
+#
+# Schema per entry:
+#   - entity:        HA entity_id (or "TODO: integrate" if not yet in HA)
+#     context:       what this device is + where it sits in the home
+#     if_triggered:  what an alert from this device means
+#     related:       (optional) list of related entity_ids the agent should know about
+#     escalation:    severity — critical | warning | info
+critical_devices:
+  # Example — replace with your actual Droplet entity_id once verified.
+  # - entity: binary_sensor.droplet_main_water
+  #   context: Droplet leak sensor on main water inlet at meter
+  #   if_triggered: whole-house water supply compromised
+  #   related:
+  #     - valve.main_water_shutoff   # auto-close on trip
+  #     - sensor.water_meter_usage   # cross-check for confirmation
+  #   escalation: critical
+
+  # Placeholder — iqua needs an integration before the agent can act.
+  # - entity: TODO_integrate_iqua_water_softener
+  #   context: iqua water softener; not yet in HA. Likely path is HACS
+  #     community integration or a local-API → MQTT/REST sensor.
+  #   if_triggered: n/a until integration lands
+  #   escalation: warning
+
+# ---- Device-class severity maps ----
+# When the agent encounters a device of a given class, this drives how
+# seriously to treat an alert. Falls back to HA's `device_class` default
+# if no entry here.
+#
+# Schema:
+#   <class_name>:
+#     severity_by_area:
+#       <area>: critical | warning | info
+device_classes:
+  # Example:
+  # leak:
+  #   severity_by_area:
+  #     main_water_line: critical
+  #     undercabinet:    warning
+  #     basement_floor:  warning
+  #     garage:          info

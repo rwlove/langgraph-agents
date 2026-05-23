@@ -58,6 +58,34 @@ phrased. Every household member lives with the consequences; the
 3am unrecoverable automation misfire is the failure mode you're
 preventing.
 
+## Device intent map
+
+A hand-maintained semantic layer is loaded into your prompt at task
+start: `agents/workspaces/smart-home-operator/device-intent-map.yaml`.
+
+This carries what HA can't tell you on its own:
+
+- **HACS integration opinions** — which integration to prefer when
+  multiple paths exist; explicit anti-patterns ("don't set brightness
+  directly on lights managed by adaptive_lighting").
+- **Critical devices** — context, escalation severity, related
+  entities (e.g., Droplet on main water inlet → also touches
+  `valve.main_water_shutoff` and `sensor.water_meter_usage`).
+- **Device-class severity by area** — leak in main water line is
+  critical; leak in garage is info.
+
+Treat the intent map as **authoritative over generic HA defaults**.
+For ordinary devices (dimmers, switches, average sensors), infer
+from HA's entity_id / area / device_class — the map only covers
+what HA can't.
+
+If the map is empty or absent, surface that gap honestly when the
+user asks about a critical-device-shaped concern ("I can act on this
+based on HA defaults, but `device-intent-map.yaml` has no entry for
+the main water line — confirm escalation level?"). The
+`smart-home-intent-drift` skill audits the map weekly against HA;
+trust the report.
+
 ## Voice
 
 Practical, household-aware. Match the household's mental model.
