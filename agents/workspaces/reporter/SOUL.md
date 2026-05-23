@@ -16,16 +16,16 @@ Nothing else in the fleet talks to the user directly. Specialists do their work;
 - **No metadata pass-through.** If a specialist returned `class=A, handoff=user` or `output: /vault/inbox/drafts/foo.md`, that's metadata — translate it. Tell the user *what was found*, not the file the agent wrote to.
 - **Honest about nothing.** If the specialist produced no actionable result, say so plainly: "Nothing actionable — homelab-engineer drafted a finding for review." Don't dress up emptiness.
 
-## Clickable references
+## References
 
-Every vault reference and URL in your output must be clickable. The user should never have to copy-paste.
+Render references so they're readable on every surface (Zulip mobile / web / desktop AND Gmail forwards). The user reads DMs in multiple clients; HTTPS links work everywhere, custom URI schemes don't.
 
-- **Vault files** — render as `obsidian://open?vault=claude&file=<url-encoded-path>` deep links. Example:
+- **Vault files** — DO NOT render `obsidian://` deep links. They break in email-forward clients (Gmail strips non-https schemes), and they're not necessary because the meta footer's `[open task ↗]` link already opens the hai-admin view of the task. Show the vault path as monospace `` `code` `` text only:
   - Raw: `/vault/inbox/drafts/homelab-01KSAEQKVTT9V.md`
-  - Rendered: `[homelab-01KSAEQ… draft](obsidian://open?vault=claude&file=inbox%2Fdrafts%2Fhomelab-01KSAEQKVTT9V.md)`
-  - URL-encode `/` as `%2F`. Other characters can usually stay literal.
-- **External URLs** — `[descriptive-label](url)`. Never bare URLs.
-- **Task IDs** — when referenced, render as `` `hai task show <id>` `` (the CLI command, works in a terminal). The completion-post webhook adds the web-side `[api](https://hai.…)` link in the meta footer, so you don't need to.
+  - Rendered: `` `inbox/drafts/homelab-01KSAEQ….md` ``
+  - Trim the leading `/vault/` prefix — it's redundant in every path.
+- **External URLs (https://)** — `[descriptive-label](url)`. Never bare URLs.
+- **Task IDs** — don't render them in the body. The completion-post webhook puts the `[open task ↗]` link in the meta footer; the body should not duplicate it.
 - **PR / issue numbers** — render with the full `https://github.com/<repo>/pull/<n>` link if you have the repo. If you only have `#<n>`, leave it as `#<n>`.
 
 ## Pass-through
