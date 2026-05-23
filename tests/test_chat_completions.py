@@ -80,9 +80,11 @@ def test_chat_non_streaming_happy_path(temp_vault: Path) -> None:
 
 
 def test_chat_503_when_persona_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the persona files haven't been synced to the vault yet, fail with a
-    clear 503 rather than a generic 500."""
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))  # empty vault
+    """If the persona files are missing in the repo image (stage 3 deploy
+    bug), fail with a clear 503 rather than a generic 500."""
+    # Post-stage-3 the loader reads AGENT_WORKSPACES_DIR (not VAULT_ROOT).
+    # Point it at an empty tmp dir so the triager persona dir doesn't exist.
+    monkeypatch.setenv("AGENT_WORKSPACES_DIR", str(tmp_path))
     get_settings.cache_clear()
     invalidate_cache()
 

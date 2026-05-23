@@ -60,21 +60,30 @@ def _populate_temp_vault(root: Path) -> None:
 
 @pytest.fixture
 def temp_vault(tmp_path: Path) -> Iterator[Path]:
-    """A populated temp vault. Sets VAULT_ROOT env for the test duration."""
+    """A populated temp vault. Sets VAULT_ROOT + AGENT_WORKSPACES_DIR env.
+
+    VAULT_ROOT still drives skills_dir + obsidian write paths (which remain
+    vault-side). AGENT_WORKSPACES_DIR redirects the persona loader at the
+    temp fixture's workspaces subtree (post-stage-3, the loader otherwise
+    resolves to the repo-baked agents/workspaces/).
+    """
     vault = tmp_path / "claude-vault"
     vault.mkdir()
     _populate_temp_vault(vault)
 
-    prev = os.environ.get("VAULT_ROOT")
+    prev_vault = os.environ.get("VAULT_ROOT")
+    prev_workspaces = os.environ.get("AGENT_WORKSPACES_DIR")
     os.environ["VAULT_ROOT"] = str(vault)
+    os.environ["AGENT_WORKSPACES_DIR"] = str(vault / "agents" / "workspaces")
     get_settings.cache_clear()
 
     yield vault
 
-    if prev is None:
-        os.environ.pop("VAULT_ROOT", None)
-    else:
-        os.environ["VAULT_ROOT"] = prev
+    for key, prev in (("VAULT_ROOT", prev_vault), ("AGENT_WORKSPACES_DIR", prev_workspaces)):
+        if prev is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prev
     get_settings.cache_clear()
 
 
