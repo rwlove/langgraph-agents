@@ -82,11 +82,16 @@ def reporter_node(state: FleetState) -> dict[str, Any]:
     ask = "\n\n".join(materials) + (
         "\n\n## Your task\n"
         "Render this into a Zulip-markdown DM per your SOUL.\n"
-        "- Convert any vault paths into "
-        "`obsidian://open?vault=claude&file=<url-encoded-path>` deep links.\n"
-        "- Convert raw URLs into `[labeled](url)` markdown links.\n"
-        "- If the specialist's output is already clear and user-facing, pass it through "
-        "with minimal formatting — do not paraphrase or add bloat.\n"
+        "- Show vault paths as monospace `code` text (no `obsidian://` "
+        "links — they break in Gmail forwards). Trim the leading "
+        "`/vault/` prefix.\n"
+        "- Convert raw https URLs into `[labeled](url)` markdown links.\n"
+        "- Don't include the task ID in the body — the meta footer "
+        "(added by the completion-post webhook) carries the open-task "
+        "link.\n"
+        "- If the specialist's output is already clear and user-facing, "
+        "pass it through with minimal formatting — do not paraphrase or "
+        "add bloat.\n"
         "- Be terse. Lead with the answer."
     )
 
