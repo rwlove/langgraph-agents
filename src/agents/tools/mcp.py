@@ -198,6 +198,17 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
     ),
     "doc-writer": frozenset(_READ_ONLY_SEARXNG),  # for verifying upstream terminology
     "reporter": frozenset(),  # output-only — no MCP, no side effects
+    # Artist proposes Pixelle invocations; errand-runner executes them. v1
+    # capability is empty — once Pixelle is deployed in the cluster and the
+    # workflow inventory stabilizes, populate a `_PIXELLE_IMAGE_GEN` tuple
+    # with (server, method) pairs for each workflow.
+    "artist": frozenset(),
+    # Security reads HA entities (door/lock/motion/away-mode). Frigate access
+    # is direct HTTP (not via mcp-gateway) — see SOUL for the why.
+    "security": frozenset(_READ_ONLY_HA),
+    # Auditor enumerates deployed images (kubectl) + queries GitHub Security
+    # Advisories. OSV.dev access is direct HTTP (no community MCP server).
+    "auditor": frozenset(_READ_ONLY_KUBECTL),
 }
 
 

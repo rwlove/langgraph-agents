@@ -165,6 +165,13 @@ AGENT_GROUP: dict[AgentId, ModelGroup] = {
     # Reporter renders rich text for every user-facing DM — needs nuance and
     # link-formatting precision that the small P40 model can't reliably produce.
     "reporter": "local-spark",
+    # Artist composes diffusion prompts + picks workflows — benefits from
+    # Spark's better prompt-engineering performance.
+    "artist": "local-spark",
+    # Security needs nuance in distinguishing observation vs inference.
+    "security": "local-spark",
+    # Auditor needs precision in citing CVEs + scoring exposure.
+    "auditor": "local-spark",
     "observability-operator": "local-spark",
 }
 

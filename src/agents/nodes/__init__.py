@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .artist import artist_node
+from .auditor import auditor_node
 from .coder import coder_node
 from .doc_writer import doc_writer_node
 from .errand_runner import errand_runner_node
@@ -33,6 +35,7 @@ from .property_coordinator import property_coordinator_node
 from .reporter import reporter_node
 from .researcher import researcher_node
 from .reviewer import reviewer_node
+from .security import security_node
 from .smart_home_operator import smart_home_operator_node
 from .storage_operator import storage_operator_node
 from .supervisor import supervisor_node
@@ -66,6 +69,9 @@ NODES: dict[AgentId, NodeBuilder] = {
     "property-coordinator": property_coordinator_node,
     "doc-writer": doc_writer_node,
     "reporter": reporter_node,
+    "artist": artist_node,
+    "security": security_node,
+    "auditor": auditor_node,
 }
 
 
