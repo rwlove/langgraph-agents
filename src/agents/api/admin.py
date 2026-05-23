@@ -1,7 +1,7 @@
-"""Admin / inspection routes for ops + n8n integration.
+"""Admin / inspection routes for ops + Windmill integration.
 
 GET endpoints are read-only inspection. POST endpoints mutate workflow state
-(timeout-tier, cancel) and are intended for the n8n awaiting-user-sweep
+(timeout-tier, cancel) and are intended for the Windmill awaiting-user-sweep
 workflow, not for human use. They should be reachable only inside the
 cluster (no public httproute) — defense-in-depth on top of the
 NetworkPolicy that constrains ingress.
@@ -209,7 +209,7 @@ class TimeoutTierBody(BaseModel):
 
 @router.post("/tasks/{task_id}/timeout-tier")
 async def set_timeout_tier(task_id: str, body: TimeoutTierBody, request: Request) -> dict[str, Any]:
-    """Mark a paused workflow as cold (4h) or whatever tier n8n decides.
+    """Mark a paused workflow as cold (4h) or whatever tier Windmill decides.
 
     The supervisor's per-agent override logic lives at the node level;
     this endpoint just persists the timeout-tier state. The state.py
@@ -279,7 +279,7 @@ async def costs_today() -> CostSummary:
 
     Phase 5+ deliverable: when Langfuse is deployed, source the per-task
     cost from Langfuse's API. Until then, return zeros from a local
-    JSONL log + the configured caps. The n8n cost-cap-watcher reads this
+    JSONL log + the configured caps. The Windmill cost-cap-watcher reads this
     endpoint and never errors on missing data.
     """
     settings = get_settings()

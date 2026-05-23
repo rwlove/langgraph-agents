@@ -103,7 +103,7 @@ class ObservabilityFinding(BaseModel):
     blast_radius: str = Field(
         description=(
             "Enumerated dashboards / runbooks / rules / downstream consumers "
-            "(HolmesGPT prompts, n8n workflows) that reference this rule / "
+            "(HolmesGPT prompts, Windmill workflows) that reference this rule / "
             "metric / dashboard. 'Probably nothing else uses it' is not an "
             "enumeration."
         )

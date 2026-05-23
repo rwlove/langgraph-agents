@@ -1,7 +1,7 @@
 """errand-runner — the only agent with MCP write capability.
 
 Tight propose-then-execute contract: every Class C+ action MUST arrive with
-a valid signed approval token (issued by n8n's approval-broker after Rob's
+a valid signed approval token (issued by Windmill's approval-broker after Rob's
 Zulip reaction). The node verifies the token + pre-flight checks BEFORE any
 MCP write call.
 
@@ -60,8 +60,8 @@ def _verify_approval_token(
 ) -> bool:
     """HMAC-SHA256 verification. Expected payload: task_id|class|server|method|<nonce>.
 
-    n8n's approval-broker mints these. The same secret lives in 1Password and
-    is injected into both this pod and the n8n container. Phase 4 of the
+    Windmill's approval-broker mints these. The same secret lives in 1Password and
+    is injected into both this pod and the Windmill worker. Phase 4 of the
     redesign wires it; for now, treat the token format as the contract.
     """
     if not token or ":" not in token:
@@ -92,7 +92,7 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
 
     Required state fields:
       - approval_request: ApprovalRequest with target = "server.method"
-      - approval_token: signed token from n8n (or from the /approval resume)
+      - approval_token: signed token from Windmill (or from the /approval resume)
       - approval_granted: True (or this node refuses)
 
     If no approval_request is set, the request was misrouted — reject.
@@ -177,7 +177,7 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
             ),
         }
 
-    # Signed-token verification — shared HMAC with n8n's approval-receive workflow.
+    # Signed-token verification — shared HMAC with Windmill's approval-receive workflow.
     # `approval_token` is sourced from the resume verdict if we paused here,
     # otherwise from inbound state (back-compat with pre-approved test paths).
     signing_secret = settings.langgraph_approval_signing_key or ""

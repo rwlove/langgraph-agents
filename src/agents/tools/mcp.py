@@ -106,11 +106,6 @@ _READ_ONLY_IMMICH: tuple[MCPCapability, ...] = (
     MCPCapability("immich-mcp", "asset_metadata", write=False),
 )
 
-_READ_ONLY_N8N: tuple[MCPCapability, ...] = (
-    MCPCapability("n8n-mcp", "list_workflows", write=False),
-    MCPCapability("n8n-mcp", "execution_log", write=False),
-)
-
 _WRITE_ARR: tuple[MCPCapability, ...] = tuple(
     MCPCapability("arr-mcp", m, write=True)
     for m in ("add_movie", "add_series", "add_artist", "delete_movie", "delete_series")
@@ -138,10 +133,9 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         + _READ_ONLY_KUBECTL
         + _READ_ONLY_PROMETHEUS
         + _READ_ONLY_GRAFANA
-        + _READ_ONLY_N8N
     ),
     "supervisor": frozenset(
-        _READ_ONLY_KUBECTL + _READ_ONLY_PROMETHEUS + _READ_ONLY_GRAFANA + _READ_ONLY_N8N
+        _READ_ONLY_KUBECTL + _READ_ONLY_PROMETHEUS + _READ_ONLY_GRAFANA
     ),
     "reviewer": frozenset(),  # vault-only, no MCP
     "homelab-engineer": frozenset(
@@ -150,7 +144,6 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         + _READ_ONLY_GRAFANA
         + _READ_ONLY_NETBOX
         + _READ_ONLY_OMADA
-        + _READ_ONLY_N8N
     ),
     "network-operator": frozenset(
         # L1-L7 network: omada controller + netbox inventory + kubectl
@@ -190,14 +183,13 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
     "observability-operator": frozenset(
         # PrometheusRule / ServiceMonitor / AlertmanagerConfig reads via
         # kubectl. Live Prometheus query + range query (24h replay for
-        # flap-testing) via prom. Grafana dashboard inspection. n8n for
+        # flap-testing) via prom. Grafana dashboard inspection. Windmill for
         # the AlertManager→HolmesGPT path. Searxng for upstream rule
         # patterns + Robusta docs. Rule applies / silences / routing
         # changes route through errand-runner.
         _READ_ONLY_KUBECTL
         + _READ_ONLY_PROMETHEUS
         + _READ_ONLY_GRAFANA
-        + _READ_ONLY_N8N
         + _READ_ONLY_SEARXNG
     ),
     "health-tracker": frozenset(_READ_ONLY_PAPERLESS),  # ONLY paperless; no external

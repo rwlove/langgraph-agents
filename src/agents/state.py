@@ -199,7 +199,7 @@ class FleetState(BaseModel):
     # --- approval flow ---
     approval_request: ApprovalRequest | None = None
     approval_granted: bool | None = None
-    approval_token: str | None = None  # n8n-signed; verified by errand-runner
+    approval_token: str | None = None  # Windmill-signed; verified by errand-runner
 
     # --- awaiting-user state machine ---
     awaiting_user_since: datetime | None = None

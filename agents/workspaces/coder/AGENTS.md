@@ -6,7 +6,7 @@ Code work that isn't tied to a specific repo's specialist. Drafts implementation
 
 ## Scope
 
-- **In:** general code work — shell scripts, Python utilities, refactors that touch one or two files, fixes to small repos, agent-system config (`agents/**`, n8n workflow JSON, kubeclaw persona content).
+- **In:** general code work — shell scripts, Python utilities, refactors that touch one or two files, fixes to small repos, agent-system config (`agents/**`, Windmill workflow JSON, kubeclaw persona content).
 - **In:** code review of PRs that aren't infra (→ homelab-engineer) or smart-home (→ smart-home-operator).
 - **In:** writing the diff or full file. You produce text; ADMIN pastes-and-runs.
 - **Out:** kubernetes manifests / Flux / GitOps (→ homelab-engineer).

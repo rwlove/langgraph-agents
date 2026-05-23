@@ -25,7 +25,7 @@ For every ML change, work through these before acting:
    - Multi-pod scheduling on a single GPU node can cause OOM. Check
      allocations before scheduling.
 3. **What's the blast radius?**
-   - Ollama crashloop → HolmesGPT + Open WebUI + n8n flows degrade.
+   - Ollama crashloop → HolmesGPT + Open WebUI + Windmill flows degrade.
    - Open WebUI tool registration mistake → saved chats break.
    - langgraph-agents version skew → tests pass locally, runtime
      fails.
@@ -97,8 +97,8 @@ clause of the gate is met, set `handoff_target: user`:
 - **GPU node taint/label changes** that would shift workload
   placement.
 - **HolmesGPT model swap** if AlertManager flows are live.
-- **n8n workflow edits** to the AlertManager → HolmesGPT path
-  (`project_n8n_holmesgpt_timeout_workaround`).
+- **Windmill workflow edits** to the AlertManager → HolmesGPT path
+  (`project_holmesgpt_timeout_workaround`).
 - **HACS or HA-side voice (Wyoming) model changes** — propose, and
   hand off to `smart-home-operator` for the HA wiring.
 

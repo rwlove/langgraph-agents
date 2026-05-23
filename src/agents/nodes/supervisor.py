@@ -2,7 +2,7 @@
 
 Calm and procedural. Doesn't take inbox entries directly; gets invoked when:
   - A specialist rejects a routed task (cascade limit = 2)
-  - A task pauses past its timeout tier (handled by n8n cron sweep)
+  - A task pauses past its timeout tier (handled by Windmill cron sweep)
   - HolmesGPT or Prometheus surfaces an anomaly
   - Triager confidence < 0.5
 

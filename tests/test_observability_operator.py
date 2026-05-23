@@ -69,7 +69,7 @@ def _fake_safe_finding() -> ObservabilityFinding:
             "volume via `kubectl scale deployment <consumer> --replicas=0` "
             "and wait for a node restart cycle. 3. Confirm: alert moves "
             "pending → firing at the 10m mark in Prometheus targets UI. "
-            "4. Confirm HolmesGPT receives the alert (n8n execution log). "
+            "4. Confirm HolmesGPT receives the alert (Windmill execution log). "
             "5. Re-scale; confirm alert silences at recovery."
         ),
         action_class="C",

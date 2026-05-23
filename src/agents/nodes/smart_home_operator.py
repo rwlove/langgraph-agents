@@ -1,7 +1,7 @@
 """smart-home-operator — Home Assistant + protocol hubs + device fleet.
 
 Owns HA core, all integration hubs (Z-Wave / Zigbee / Matter / ESPHome /
-EMQX / Wyoming / Frigate / Music Assistant / Node-RED / HA-adjacent n8n),
+EMQX / Wyoming / Frigate / Music Assistant / Node-RED),
 the HA YAML repo at `~/workspace/claude-workspace/home-assistant-config/`,
 and the HA CNPG connection wiring. Propose-first by default. Prime
 directive: this agent **cannot break Home Assistant**. Class C+ side

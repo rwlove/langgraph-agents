@@ -12,7 +12,7 @@ Kubernetes / GitOps / homelab operations. Repo-anchored to home-ops. Own cluster
 
 ## Tools
 
-**MCP servers:** kubectl-mcp (read-only ClusterRole), prometheus-mcp, grafana-mcp, netbox-mcp, omada-mcp, n8n-mcp.
+**MCP servers:** kubectl-mcp (read-only ClusterRole), prometheus-mcp, grafana-mcp, netbox-mcp, omada-mcp, Windmill-mcp.
 
 **Skills** (from `home-ops/.agents/skills/`):
 - `add-app` — scaffold app-template HelmRelease

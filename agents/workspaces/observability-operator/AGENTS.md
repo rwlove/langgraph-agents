@@ -75,9 +75,9 @@ Propose-first by default; in this runtime side effects route through
 - **HolmesGPT prompt content** — system prompt + per-alert templates.
 - **HolmesGPT prompt versioning** + comparison baselines (which
   prompt corresponds to which Robusta version).
-- The AlertManager → n8n → HolmesGPT path has a **25-min HTTP
+- The AlertManager → Windmill → HolmesGPT path has a **25-min HTTP
   timeout band-aid** until Spark
-  (`project_n8n_holmesgpt_timeout_workaround` — revert to 600s
+  (`project_holmesgpt_timeout_workaround` — revert to 600s
   post-Spark). Cooperate with `ml-operator` on that revert.
 
 **Routing semantics**
@@ -105,7 +105,7 @@ Propose-first by default; in this runtime side effects route through
 **Vault + memory:**
 
 - `~/vaults/claude/projects/home-ops/memory/` —
-  `project_n8n_holmesgpt_timeout_workaround`,
+  `project_holmesgpt_timeout_workaround`,
   `project_ha_barman_retention_capped` (an intentional knob
   not to "fix"), `project_helmrelease_disablewait` (slow cold-starts
   cause alert noise during deploys),
