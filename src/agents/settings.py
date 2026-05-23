@@ -7,6 +7,7 @@ locally).
 
 from __future__ import annotations
 
+import os
 from functools import cache
 from pathlib import Path
 
@@ -325,7 +326,19 @@ class Settings(BaseSettings):
 
     @property
     def workspaces_dir(self) -> Path:
-        return self.vault_root / "agents" / "workspaces"
+        """Path to agent workspace definitions (SOUL/IDENTITY/AGENTS/USER).
+
+        Resolves to the repo-baked `agents/workspaces/` directory shipped
+        in the image via the Dockerfile's `COPY agents/`. Overridable via
+        $AGENT_WORKSPACES_DIR for tests that need a fixture path.
+
+        Skills still live in vault — see `skills_dir`.
+        """
+        if override := os.environ.get("AGENT_WORKSPACES_DIR"):
+            return Path(override)
+        # /app/src/agents/settings.py -> /app -> /app/agents/workspaces
+        # In dev: <repo>/src/agents/settings.py -> <repo> -> <repo>/agents/workspaces
+        return Path(__file__).resolve().parent.parent.parent / "agents" / "workspaces"
 
     @property
     def skills_dir(self) -> Path:

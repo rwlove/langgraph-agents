@@ -30,7 +30,9 @@ def test_load_persona_for_every_agent(temp_vault: Path) -> None:
 
 def test_load_persona_missing_dir_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An agent without a workspace dir is a deployment bug — fail loudly."""
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    # Post-stage-3 the loader reads AGENT_WORKSPACES_DIR (not VAULT_ROOT).
+    # Point it at an empty tmp dir so no agent has a workspace dir.
+    monkeypatch.setenv("AGENT_WORKSPACES_DIR", str(tmp_path))
     get_settings.cache_clear()
     invalidate_cache()
 

@@ -1,17 +1,24 @@
-"""Persona loader: vault workspace files → composed system prompt.
+"""Persona loader: repo workspace files → composed system prompt.
 
-Each agent has a directory at `vault/agents/workspaces/<id>/` with:
+Each agent has a directory at `<repo>/agents/workspaces/<id>/` with:
 - SOUL.md      — philosophy + voice + red lines (per-agent overlay)
 - IDENTITY.md  — name + emoji + creature/vibe
 - AGENTS.md    — role + scope + tools + behaviors
-- USER.md      — symlink to shared _shared/USER.md (canonical Rob profile)
+- USER.md      — optional; if absent, the loader falls back to _shared/USER.md.
+                 (Per-agent USER.md was removed in stage 2 of the migration —
+                 every per-agent USER.md was byte-identical to _shared/USER.md.)
 
-Plus a shared baseline at `vault/agents/workspaces/_shared/SOUL.md` that every
-agent inherits.
+Plus a shared baseline at `<repo>/agents/workspaces/_shared/{SOUL,USER}.md`
+that every agent inherits.
 
 The system prompt is the concatenation of: shared SOUL, per-agent SOUL,
 IDENTITY, AGENTS, USER. The order is deliberate — philosophy first, then who
 you are, then what you do, then who you serve.
+
+Path resolution: `settings.workspaces_dir` derives from this module's location
+via `Path(__file__).parent.parent.parent`, so it resolves to the repo-baked
+`agents/workspaces/` in both dev (cloned repo) and prod (Dockerfile-COPYed).
+Override via $AGENT_WORKSPACES_DIR for test fixtures.
 """
 
 from __future__ import annotations
@@ -78,7 +85,8 @@ def load_persona(agent_id: AgentId) -> str:
     if not agent_dir.is_dir():
         raise FileNotFoundError(
             f"No workspace dir for agent '{agent_id}' at {agent_dir}. "
-            f"Sync vault to PVC and ensure the workspaces/<id>/ directory exists."
+            f"Check that agents/workspaces/{agent_id}/ exists in the repo "
+            f"(or $AGENT_WORKSPACES_DIR override if running tests)."
         )
 
     sections: list[tuple[str, str]] = []
