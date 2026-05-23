@@ -43,6 +43,12 @@ RUN groupadd --gid 1000 app && \
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app src/ /app/src/
+# Agent persona definitions (SOUL/IDENTITY/AGENTS/USER per agent + _shared/).
+# Loaded at runtime by `agents.personas.load_persona` — resolved relative to
+# settings.py via `Path(__file__).parent.parent.parent / "agents/workspaces"`.
+# Migrated from the vault PVC mount to the image in stages 1-3 (PRs #71, #73,
+# and this PR). Skills still live in vault — see `settings.skills_dir`.
+COPY --chown=app:app agents/ /app/agents/
 
 USER app
 EXPOSE 8765
