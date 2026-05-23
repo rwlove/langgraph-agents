@@ -66,8 +66,29 @@ def _fake_triager_returning(target: str) -> Callable[[FleetState], dict[str, Any
 
 
 def _fake_reporter() -> Callable[[FleetState], dict[str, Any]]:
+    """Fake terminal node that sets a known output string.
+
+    Despite the name, this is used in tests as the *historian* stub — the
+    output is what the reporter (real or stubbed) then passes through.
+    Kept under this name to minimize churn in existing tests.
+    """
+
     def _node(state: FleetState) -> dict[str, Any]:
         return {"output": "fake reporter output"}
+
+    return _node
+
+
+def _passthrough_reporter() -> Callable[[FleetState], dict[str, Any]]:
+    """Fake the real reporter node: pass through `state.output` unchanged.
+
+    The real reporter calls an LLM to re-render. In integration tests we
+    don't have an LLM endpoint, so we patch it to a deterministic pass-
+    through that preserves whatever the upstream specialist produced.
+    """
+
+    def _node(state: FleetState) -> dict[str, Any]:
+        return {"output": state.output or ""}
 
     return _node
 
@@ -149,6 +170,10 @@ async def _run_graph(
         {
             "triager": _fake_triager_returning("historian"),
             "historian": _fake_reporter(),
+            # The real reporter calls an LLM; stub it to pass through so
+            # tests are deterministic. Reporter is now the universal final
+            # hop, so every chain runs it.
+            "reporter": _passthrough_reporter(),
         },
     ):
         graph = build_fleet_graph(checkpointer=saver)
@@ -171,9 +196,10 @@ async def test_pool_completes_graph_run(
     final = await _run_graph(pool_saver, task_id, temp_vault)
 
     assert final.get("output") == "fake reporter output"
-    # START → triager → reporter → END = 4 checkpoint rows
+    # START → triager → historian → reporter → END = 5 checkpoint rows
+    # (reporter is the universal final hop introduced in PR #77).
     count = await _count_checkpoints(task_id)
-    assert count == 4, f"expected 4 checkpoints, got {count}"
+    assert count == 5, f"expected 5 checkpoints, got {count}"
 
 
 async def test_pool_recovers_after_server_terminates_conns(
@@ -195,7 +221,7 @@ async def test_pool_recovers_after_server_terminates_conns(
     """
     # Warm up
     await _run_graph(pool_saver, "pool-warm", temp_vault)
-    assert await _count_checkpoints("pool-warm") == 4
+    assert await _count_checkpoints("pool-warm") == 5
 
     # Kill every backend for this DB user
     terminated = await _terminate_all_user_conns(POSTGRES_TEST_URL)  # type: ignore[arg-type]
@@ -205,4 +231,4 @@ async def test_pool_recovers_after_server_terminates_conns(
     # replacing dead conns this will time out and fail loudly.
     async with asyncio.timeout(10):
         await _run_graph(pool_saver, "pool-recover", temp_vault)
-    assert await _count_checkpoints("pool-recover") == 4
+    assert await _count_checkpoints("pool-recover") == 5

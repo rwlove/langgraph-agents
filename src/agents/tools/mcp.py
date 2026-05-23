@@ -205,6 +205,7 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         _READ_ONLY_PAPERLESS + _READ_ONLY_SEARXNG + _READ_ONLY_IMMICH
     ),
     "doc-writer": frozenset(_READ_ONLY_SEARXNG),  # for verifying upstream terminology
+    "reporter": frozenset(),  # output-only — no MCP, no side effects
 }
 
 

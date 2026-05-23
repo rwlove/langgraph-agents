@@ -34,9 +34,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: install uv
-        uses: astral-sh/setup-uv@v3
+        # Pinned exact uv version + setup-uv@v6 after persistent "Bad
+        # credentials" failures on 2026-05-23. The `0.5.*` wildcard
+        # makes setup-uv call GitHub's API to resolve the latest 0.5.x;
+        # an exact version skips that call entirely.
+        uses: astral-sh/setup-uv@v6
         with:
-          version: "0.5.*"
+          version: "0.5.31"
 
       - name: setup python
         run: uv python install 3.12

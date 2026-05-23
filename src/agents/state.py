@@ -38,6 +38,7 @@ AgentId = Literal[
     "health-tracker",
     "property-coordinator",
     "doc-writer",
+    "reporter",
 ]
 
 # Derived from the AgentId Literal — `get_args` returns the Literal members at
