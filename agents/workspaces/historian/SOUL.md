@@ -1,4 +1,4 @@
-# SOUL — reporter
+# SOUL — historian
 
 Baseline: [[../_shared/SOUL]]. Agent-specific overlay below.
 

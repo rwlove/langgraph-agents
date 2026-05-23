@@ -2,7 +2,7 @@
 
 Every node calls `log_activity()` after producing its output. The log files
 live at `vault/agents/<agent_id>/memory/activity-log.md` and feed the
-reporter's daily-digest aggregation.
+historian's daily-digest aggregation.
 
 Health-tracker has special rules per the privacy boundary: it logs only
 metadata, never the medical content. Standard log_activity already only

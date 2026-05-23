@@ -1,4 +1,7 @@
-"""reporter — activity log curator + accomplishments promoter.
+"""historian — activity log curator + accomplishments promoter.
+
+Renamed from `reporter` in this PR; the `reporter` name is reserved for the
+new final-hop user-facing messenger agent (see Stage-2-of-reporter-work).
 
 Phase 1 implementation: produce a digest from the per-agent activity logs
 under `vault/agents/*/memory/activity-log.md`. The full TODO-2 backfill +
@@ -21,7 +24,7 @@ from agents.settings import get_settings
 from agents.state import AgentId, FleetState
 from agents.tools.obsidian import WriteResult, _write_atomic
 
-_AGENT_ID: AgentId = "reporter"
+_AGENT_ID: AgentId = "historian"
 _TEMPERATURE = 0.2
 
 
@@ -101,7 +104,7 @@ def _write_daily_digest(day: date, body: str) -> WriteResult:
     return WriteResult(path=path, bytes_written=n)
 
 
-def reporter_node(state: FleetState) -> dict[str, Any]:
+def historian_node(state: FleetState) -> dict[str, Any]:
     """Aggregate per-agent activity into the daily digest.
 
     Triggered by the n8n schedule cron at 22:00 local. The inbox `content`

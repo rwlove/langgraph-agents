@@ -29,7 +29,7 @@ from .network_operator import network_operator_node
 from .note_maker import note_maker_node
 from .observability_operator import observability_operator_node
 from .property_coordinator import property_coordinator_node
-from .reporter import reporter_node
+from .historian import historian_node
 from .researcher import researcher_node
 from .reviewer import reviewer_node
 from .smart_home_operator import smart_home_operator_node
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
 NODES: dict[AgentId, NodeBuilder] = {
     "triager": triager_node,
-    "reporter": reporter_node,
+    "historian": historian_node,
     "note-maker": note_maker_node,
     "researcher": researcher_node,
     "coder": coder_node,

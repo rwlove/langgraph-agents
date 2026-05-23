@@ -1,4 +1,4 @@
-# AGENTS — reporter
+# AGENTS — historian
 
 ## Role
 
@@ -88,13 +88,13 @@ You don't take inbox entries. If routed something via mistake, return:
 
 ```yaml
 rejected: true
-reason: reporter is an aggregator; this needs an executor or specialist
+reason: historian is an aggregator; this needs an executor or specialist
 suggested_target: <agent>
 ```
 
 ## Memory writes
 
-- Own activity log at `~/vaults/claude/agents/reporter/memory/activity-log.md`.
+- Own activity log at `~/vaults/claude/agents/historian/memory/activity-log.md`.
 - Daily digest output goes to `reports/daily-YYYY-MM-DD.md`, NOT memory — these are user-facing artifacts, not agent-internal state.
 
 ## Privacy

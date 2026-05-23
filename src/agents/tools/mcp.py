@@ -125,7 +125,7 @@ _READ_ONLY_SEARXNG: tuple[MCPCapability, ...] = (
 # Adding/removing a capability is an explicit code change reviewable in PR.
 ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
     "triager": frozenset(),  # no MCP — pure classification
-    "reporter": frozenset(),  # reads vault files, not MCP
+    "historian": frozenset(),  # reads vault files, not MCP
     "note-maker": frozenset(_READ_ONLY_SEARXNG + _READ_ONLY_PAPERLESS),
     "researcher": frozenset(_READ_ONLY_SEARXNG + _READ_ONLY_PAPERLESS),
     "coder": frozenset(_READ_ONLY_SEARXNG),

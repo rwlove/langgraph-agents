@@ -100,11 +100,11 @@ def _fake_triager(state: Any) -> dict[str, Any]:
         summary="repro",
         domain="homelab",
         intent="question",
-        target_agent="reporter",
+        target_agent="historian",
         confidence=1.0,
         reasoning="repro harness",
     )
-    return {"triage": decision, "target_agent": "reporter"}
+    return {"triage": decision, "target_agent": "historian"}
 
 
 def _make_fake_reporter(extra_writes: int) -> Callable[[Any], dict[str, Any]]:
@@ -247,7 +247,7 @@ async def _running_app(database_url: str) -> AsyncIterator[Any]:
         NODES,
         {
             "triager": _fake_triager,
-            "reporter": _make_fake_reporter(extra_writes=0),
+            "historian": _make_fake_reporter(extra_writes=0),
         },
     ):
         async with httpx.AsyncClient(

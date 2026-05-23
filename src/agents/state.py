@@ -22,7 +22,7 @@ def _now_utc() -> datetime:
 
 AgentId = Literal[
     "triager",
-    "reporter",
+    "historian",
     "note-maker",
     "researcher",
     "coder",

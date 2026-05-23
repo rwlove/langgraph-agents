@@ -113,7 +113,7 @@ def _make_llm(agent_id: AgentId, temperature: float | None) -> BaseChatModel:
     Previously this constructed ``ChatOllama`` directly against
     ``settings.ollama_base_url`` with a local per-agent model dict, which
     silently routed every model (including the Spark-class agents like
-    reporter / supervisor / coder) to P40 with qwen2.5:7b.
+    historian / supervisor / coder) to P40 with qwen2.5:7b.
 
     The factory attaches both ``LangGraphMetricsCallback`` and the
     Langfuse callback intrinsically — see ``observability.py`` for why

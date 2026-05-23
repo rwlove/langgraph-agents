@@ -25,7 +25,7 @@ def _populate_temp_vault(root: Path) -> None:
 
     agent_ids = [
         "triager",
-        "reporter",
+        "historian",
         "note-maker",
         "researcher",
         "coder",
