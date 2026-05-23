@@ -47,6 +47,7 @@ _DEFAULT_ACTION_CLASS: dict[str, ActionClass] = {
     "health-tracker": "C",  # every health-tracker output is approval-gated
     "property-coordinator": "B",
     "doc-writer": "B",
+    "reporter": "A",  # output-only — reads state, renders, no side effects
 }
 
 
@@ -172,34 +173,48 @@ def build_fleet_graph(
     # ---- edges ----
     builder.add_edge(START, "triager")
 
-    # Triager → one of 12 specialists (or END if triager is somehow the target)
+    # Reporter is the universal final hop. Every chain that would have
+    # terminated at END now routes through reporter, which renders the chain's
+    # raw state into a user-facing Zulip-markdown message. Reporter itself is
+    # the only node that edges to END.
+    #
+    # The conditional-router END returns get re-targeted at "reporter" via
+    # each route map below; reporter → END is a direct edge.
+
+    # Triager → one of 12 specialists, or → reporter if triager is somehow the
+    # target / no target. Reporter is also a valid pin target via the
+    # /inbox `target_agent` envelope (treats `state.content` as the input).
     triage_route_map: dict[Hashable, str] = {
         agent: agent for agent in ALL_AGENT_IDS if agent != "triager"
     }
-    triage_route_map[END] = END
+    triage_route_map[END] = "reporter"
     builder.add_conditional_edges("triager", _route_after_triage, triage_route_map)
 
     # Each specialist routes to supervisor (rejection), errand-runner
-    # (approval composition), or END. errand-runner is excluded from this
-    # loop and wired directly to END below — re-applying the same router
-    # post-execute would re-trigger on its still-set approval_request and
-    # loop the node back into itself.
+    # (approval composition), or reporter (terminal). errand-runner and
+    # reporter are excluded from this loop — errand-runner edges directly to
+    # reporter below (re-applying the same router post-execute would re-trigger
+    # on its still-set approval_request and loop the node back into itself);
+    # reporter edges directly to END.
     specialist_route_map: dict[Hashable, str] = {
         "supervisor": "supervisor",
         "errand-runner": "errand-runner",
-        END: END,
+        END: "reporter",
     }
     for agent in ALL_AGENT_IDS:
-        if agent in ("triager", "supervisor", "errand-runner"):
+        if agent in ("triager", "supervisor", "errand-runner", "reporter"):
             continue
         builder.add_conditional_edges(agent, _route_after_specialist, specialist_route_map)
-    builder.add_edge("errand-runner", END)
+    builder.add_edge("errand-runner", "reporter")
 
-    # Supervisor either reroutes to a specialist or escalates to END.
+    # Supervisor either reroutes to a specialist or escalates to reporter.
     supervisor_route_map: dict[Hashable, str] = {
         agent: agent for agent in ALL_AGENT_IDS if agent not in ("triager", "supervisor")
     }
-    supervisor_route_map[END] = END
+    supervisor_route_map[END] = "reporter"
     builder.add_conditional_edges("supervisor", _route_after_supervisor, supervisor_route_map)
+
+    # Reporter → END. This is the ONLY edge to END.
+    builder.add_edge("reporter", END)
 
     return builder.compile(checkpointer=checkpointer, store=store)

@@ -30,6 +30,7 @@ from .network_operator import network_operator_node
 from .note_maker import note_maker_node
 from .observability_operator import observability_operator_node
 from .property_coordinator import property_coordinator_node
+from .reporter import reporter_node
 from .researcher import researcher_node
 from .reviewer import reviewer_node
 from .smart_home_operator import smart_home_operator_node
@@ -64,6 +65,7 @@ NODES: dict[AgentId, NodeBuilder] = {
     "health-tracker": health_tracker_node,
     "property-coordinator": property_coordinator_node,
     "doc-writer": doc_writer_node,
+    "reporter": reporter_node,
 }
 
 

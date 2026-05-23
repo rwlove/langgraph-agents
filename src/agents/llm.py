@@ -162,6 +162,9 @@ AGENT_GROUP: dict[AgentId, ModelGroup] = {
     "storage-operator": "local-spark",
     "smart-home-operator": "local-spark",
     "ml-operator": "local-spark",
+    # Reporter renders rich text for every user-facing DM — needs nuance and
+    # link-formatting precision that the small P40 model can't reliably produce.
+    "reporter": "local-spark",
     "observability-operator": "local-spark",
 }
 
