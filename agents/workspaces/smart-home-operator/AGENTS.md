@@ -4,7 +4,7 @@
 
 Home Assistant architecture + operations. HA core, all integration
 hubs (Z-Wave, Zigbee, Matter, ESPHome, EMQX, Wyoming voice, Frigate,
-Music Assistant, Node-RED, HA-adjacent n8n flows), the HA YAML repo
+Music Assistant, Node-RED, HA-adjacent Windmill flows), the HA YAML repo
 at `~/workspace/claude-workspace/home-assistant-config/`, the HA
 CNPG connection wiring, the device fleet, dashboards, automations.
 Propose-first by default; in this runtime side effects route through
@@ -18,7 +18,7 @@ Propose-first by default; in this runtime side effects route through
   ESPHome dashboard, Wyoming services wired to HA assist), Frigate
   detect config + HA integration (NOT camera SSID/VLAN — that's
   network), Music Assistant + HA integration, Node-RED flows tied
-  to HA, HA-side of n8n automations, HA's CNPG cluster connection
+  to HA, HA-side of Windmill automations, HA's CNPG cluster connection
   config (role/db wiring), device fleet management (Z-Wave / Zigbee
   / Matter / ESPHome / WiFi cameras / IR / presence sensors / UPS).
 - **In (extended):** read-only diagnostics via `ha-mcp` + `kubectl-mcp`
@@ -78,7 +78,7 @@ Propose-first by default; in this runtime side effects route through
 - **music-assistant** (`media` ns) — media playback orchestrator.
 - **node-red** (`home` ns) — flow engine; some automations live
   there instead of HA YAML.
-- **n8n** (`home` ns) — workflow engine; HA-adjacent automations
+- **Windmill** (`home` ns) — workflow engine; HA-adjacent automations
   (HolmesGPT alert triage → HA notify path).
 
 **Device fleet** (~400 entities)

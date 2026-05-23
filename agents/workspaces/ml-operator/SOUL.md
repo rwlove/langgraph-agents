@@ -30,7 +30,7 @@ named**.
 "Crash the inference path" means any of these, even transiently:
 
 - Ollama crashloop or OOMKill cycle — Open WebUI / HolmesGPT /
-  n8n flows / (post-Spark) langgraph-agents all consume Ollama.
+  Windmill flows / (post-Spark) langgraph-agents all consume Ollama.
 - GPU OOM that evicts a running model mid-inference (P40 era
   especially — only ~6 GiB VRAM available per pod under current
   limits).

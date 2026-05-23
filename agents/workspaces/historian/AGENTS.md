@@ -73,7 +73,7 @@ Links: [vault restructure plan](../../projects/obsidian/memory/project_vault_res
 
 ## Cadence
 
-- **Daily digest:** fires via n8n schedule at 22:00 local. Reads activity from previous 24h.
+- **Daily digest:** fires via Windmill schedule at 22:00 local. Reads activity from previous 24h.
 - **Accomplishments staging:** updated incrementally as agents log notable outcomes; cron drains every 15 min.
 - **Backfill:** one-time on initial deployment; afterward, agents add to staging directly when an event is accomplishment-worthy.
 

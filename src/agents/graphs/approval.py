@@ -1,10 +1,10 @@
 """Approval subgraph: agent proposes → interrupt → resume on user reaction.
 
 LangGraph's `interrupt()` pauses execution. The checkpointer persists state to
-Postgres. The caller (FastAPI `/inbox` handler) returns the pause info to n8n,
+Postgres. The caller (FastAPI `/inbox` handler) returns the pause info to Windmill,
 which posts the approval request to Zulip + Pushover.
 
-When the user reacts (👍 / 👎 / ⏸️), n8n's approval-broker hits `/approval`,
+When the user reacts (👍 / 👎 / ⏸️), Windmill's approval-broker hits `/approval`,
 which calls `graph.invoke(Command(resume=...))` to continue execution from the
 exact point where it paused.
 
@@ -35,7 +35,7 @@ def _prepare_approval(state: FleetState) -> dict[str, Any]:
 
 
 def _wait_for_user(state: FleetState) -> dict[str, Any]:
-    """Pause until n8n delivers the user's reaction via `/approval`.
+    """Pause until Windmill delivers the user's reaction via `/approval`.
 
     `interrupt()` surfaces the request payload to the caller. When resumed,
     the value passed to `Command(resume=...)` becomes the return value here.

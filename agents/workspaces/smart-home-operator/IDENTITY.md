@@ -116,7 +116,7 @@ clause of the gate is met, set `handoff_target: user`:
 - **HACS install/update** — third-party code, restart required.
 - **Helmrelease / kubectl changes** to home-assistant,
   zwave-js-ui, zigbee2mqtt, emqx, matter-server, esphome,
-  wyoming-services, frigate, music-assistant, n8n, node-red, or
+  wyoming-services, frigate, music-assistant, Windmill, node-red, or
   the HA CNPG cluster. Even routine ones (resource bumps, image
   pins) — propose and let the user run the merge.
 

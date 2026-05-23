@@ -184,13 +184,13 @@ class Settings(BaseSettings):
     zulip_triager_email: str | None = Field(default=None)
     zulip_triager_api_key: str | None = Field(default=None)
 
-    # --- approval signing (HMAC shared with n8n approval-broker) ---
+    # --- approval signing (HMAC shared with Windmill approval-broker) ---
     langgraph_approval_signing_key: str | None = Field(
         default=None,
         description=(
-            "Shared HMAC secret for verifying approval tokens minted by n8n's "
+            "Shared HMAC secret for verifying approval tokens minted by Windmill's "
             "approval-receive workflow. Must match $env.LANGGRAPH_APPROVAL_SIGNING_KEY "
-            "in the n8n container. Both pods receive it from the same 1Password item "
+            "in the Windmill worker. Both pods receive it from the same 1Password item "
             "via ExternalSecret."
         ),
     )

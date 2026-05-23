@@ -52,7 +52,7 @@ and `rollback` must satisfy:
    AlertManager config snapshot (not a single rule), the gate is
    **not** satisfied.
 5. **Blast radius enumerated.** Every dashboard, runbook, rule,
-   or downstream consumer (HolmesGPT prompts, n8n workflows,
+   or downstream consumer (HolmesGPT prompts, Windmill workflows,
    per-app dashboards) that references this rule / metric /
    dashboard is listed in `affected_resources`.
 6. **No silent muting.** The change does NOT silence an alert
@@ -93,8 +93,8 @@ clause is met, set `handoff_target: user`:
 - **kube-prometheus-stack helmrelease bumps** — propose; user
   runs.
 - **AlertmanagerConfig restructure.**
-- **n8n workflow edits** to the AlertManager → HolmesGPT path
-  (`project_n8n_holmesgpt_timeout_workaround`) — propose; user
+- **Windmill workflow edits** to the AlertManager → HolmesGPT path
+  (`project_holmesgpt_timeout_workaround`) — propose; user
   runs.
 
 ## Red lines

@@ -1,4 +1,4 @@
-"""Admin endpoints used by the n8n awaiting-user-sweep + cost-cap-watcher."""
+"""Admin endpoints used by the Windmill awaiting-user-sweep + cost-cap-watcher."""
 
 from __future__ import annotations
 

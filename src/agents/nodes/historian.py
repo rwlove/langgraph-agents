@@ -107,7 +107,7 @@ def _write_daily_digest(day: date, body: str) -> WriteResult:
 def historian_node(state: FleetState) -> dict[str, Any]:
     """Aggregate per-agent activity into the daily digest.
 
-    Triggered by the n8n schedule cron at 22:00 local. The inbox `content`
+    Triggered by the Windmill schedule cron at 22:00 local. The inbox `content`
     is expected to be a marker like "generate today's digest" — the actual
     data source is the activity logs on disk.
     """

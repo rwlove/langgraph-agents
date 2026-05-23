@@ -43,9 +43,9 @@ Propose-first by default; in this runtime side effects route through
   Spark** (`project_p40_model_size_cap` — qwen2.5:14b deleted after
   3 OOMKills). Pulls evict; thrash control is your job.
 - **HolmesGPT** — Robusta-driven alert triage, consumes Ollama.
-  AlertManager → HolmesGPT path runs through n8n with **25-min HTTP
+  AlertManager → HolmesGPT path runs through Windmill with **25-min HTTP
   timeout band-aid** until Spark
-  (`project_n8n_holmesgpt_timeout_workaround` — revert to 600s
+  (`project_holmesgpt_timeout_workaround` — revert to 600s
   post-Spark).
 - **Open WebUI** — primary chat UI, registered against Ollama + the
   lovenet-gateway MCP surface. Tool registration is **curated**;
