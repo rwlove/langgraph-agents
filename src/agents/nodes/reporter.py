@@ -41,7 +41,9 @@ def reporter_node(state: FleetState) -> dict[str, Any]:
     """
     persona = load_persona(_AGENT_ID)
 
-    upstream_agent = state.target_agent or "triager"
+    # `upstream_agent` widens to `str` so we can substitute "(direct)" below
+    # for the self-targeted reporter case; the AgentId Literal would reject it.
+    upstream_agent: str = state.target_agent or "triager"
     upstream_output = (state.output or "").strip()
 
     # Special case: reporter targeted directly (target_agent="reporter" via the
