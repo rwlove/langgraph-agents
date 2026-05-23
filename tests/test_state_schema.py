@@ -29,7 +29,10 @@ def test_all_agent_ids_count() -> None:
     # + ml-operator (promoted from ml-tuner, 2026-05-18)
     # + observability-operator (net-new, 2026-05-18)
     # + reporter (final-hop user-facing messenger, 2026-05-23)
-    assert len(ALL_AGENT_IDS) == 18
+    # + artist (ComfyUI image generation via Pixelle-MCP, 2026-05-23)
+    # + security (surveillance + physical-security analyst, 2026-05-23)
+    # + auditor (vulnerability researcher, 2026-05-23)
+    assert len(ALL_AGENT_IDS) == 21
 
 
 def test_triage_decision_accepts_valid_target() -> None:
