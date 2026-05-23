@@ -210,6 +210,10 @@ class QueueWorker:
             idempotency_key=envelope.get("idempotency_key"),
             ttl_seconds=envelope.get("ttl_seconds"),
             data_tier=envelope.get("data_tier", "internal"),
+            # Caller-pinned target agent (Windmill workflows that know
+            # the right specialist). When set, triager_node respects it
+            # and skips its own routing — see agents.nodes.triager.
+            target_agent=envelope.get("target_agent"),
         )
         config: Any = {"configurable": {"thread_id": task_id}}
         final = await self._graph.ainvoke(initial_state, config=config)

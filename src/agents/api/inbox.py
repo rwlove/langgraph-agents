@@ -70,6 +70,14 @@ class InboxRequest(BaseModel):
     retry_policy: RetryPolicy | None = None
     data_tier: DataTier = "internal"
 
+    # When set, the supervisor/triager loop respects this pin and skips
+    # its own routing decision. Used by Windmill workflows that already
+    # know the right specialist (e.g., alertmanager-holmesgpt-notify
+    # routes by namespace; langgraph-renovate-triage knows it's a code
+    # task). Bypasses qwen2.5:7b's known mis-routing of triage-style
+    # prompts to errand-runner. None = let triager decide as before.
+    target_agent: str | None = None
+
 
 class InboxResponse(BaseModel):
     task_id: str

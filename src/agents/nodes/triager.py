@@ -29,7 +29,31 @@ def triager_node(state: FleetState) -> dict[str, Any]:
     """Classify the inbox entry, return routing decision.
 
     Returns a partial-state dict that LangGraph merges into `state`.
+
+    Caller-pinned routing: if the envelope (or any prior node) already
+    set `state.target_agent`, respect it and skip the LLM call. Used
+    by Windmill workflows that already know the right specialist
+    (alertmanager-holmesgpt-notify routes by namespace; the Renovate
+    triage workflow pins to homelab-engineer). This sidesteps the
+    qwen2.5:7b triager's known mis-routing of triage-style prompts
+    to errand-runner.
     """
+    if state.target_agent is not None:
+        # Synthesize a minimal TriageDecision so downstream nodes that
+        # inspect state.triage keep working; the routing is already
+        # decided.
+        return {
+            "triage": TriageDecision(
+                summary=state.content[:120],
+                domain="homelab",  # caller-pinned routes don't need accurate domain
+                intent="action",
+                target_agent=state.target_agent,
+                confidence=1.0,
+                reasoning="caller-pinned via envelope.target_agent — triager skipped",
+            ),
+            # leave target_agent as-is; we just confirm it
+        }
+
     persona = load_persona(_TRIAGER_AGENT_ID)
     llm = _build_llm()
 
