@@ -19,16 +19,18 @@ Adding an agent touches **five places**. See `.agents/instructions/persona.md` (
 ## Graph topology
 
 ```
-                       ┌─────────┐
-START ──▶ triager ──▶ (1 of 12)  ──▶ END
-                       │   │   │
-                       │ rejection
-                       │   │   │
-                       ▼   ▼   ▼
-                     supervisor ──▶ reroute or END (escalation)
+                                          ╭─ rejection → supervisor → reroute or → reporter → END
+                                          │
+START ──▶ triager ──▶ specialist ──▶ reporter ──▶ END
+                       (1 of 15)            ↑
+                          │                 │
+                          ╰─ approval_request → errand-runner ──╯
+                               (interrupt → /approval → resume)
 ```
 
-Cascade depth is capped at 2 by the supervisor (`FleetState.cascade_count`). Each node either ENDs the run, sets `rejection` to bounce to supervisor, or — for class-C/D actions — returns an `ApprovalRequest` and pauses via `interrupt()` until the `/approval` endpoint resumes the workflow.
+Cascade depth is capped at 2 by the supervisor (`FleetState.cascade_count`). Each specialist either routes to reporter directly, sets `rejection` to bounce to supervisor, or — for class-C/D actions — returns an `ApprovalRequest` and pauses via `interrupt()` until the `/approval` endpoint resumes the workflow. **Reporter is the universal final hop** — every chain ends with reporter translating raw specialist output into a user-facing Zulip-markdown DM.
+
+**See [`PIPELINE.md`](PIPELINE.md) for the full end-to-end walk-through** with every agent linked to its definition.
 
 ## HTTP surface
 
