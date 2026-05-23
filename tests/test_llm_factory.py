@@ -78,13 +78,13 @@ def test_local_spark_returns_chat_ollama_when_spark_healthy(
     monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
     with patch("agents.llm.service_healthy", return_value=True):
-        model = llm("reporter")  # reporter is local-spark
+        model = llm("historian")  # reporter is local-spark
     assert isinstance(model, ChatOllama)
     assert "spark.test" in model.base_url
     assert model.model == "qwen2.5:32b"
     handler = _metrics_handler(model)
     assert handler is not None
-    assert handler.agent == "reporter"
+    assert handler.agent == "historian"
     assert handler.group == "local-spark"
     assert handler.model == "qwen2.5:32b"
 
@@ -186,7 +186,7 @@ def test_local_spark_raises_with_failed_group_local_spark_when_both_down(
         patch("agents.llm.service_healthy", return_value=False),
         pytest.raises(LocalOllamaUnavailable) as excinfo,
     ):
-        llm("reporter")  # reporter is local-spark
+        llm("historian")  # reporter is local-spark
     assert excinfo.value.group == "local-spark"
     assert excinfo.value.failed_group == "local-spark"
 

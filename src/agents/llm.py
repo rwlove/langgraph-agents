@@ -147,7 +147,7 @@ GROUP_MODELS: dict[ModelGroup, str] = {
 # Health-tracker is local-only by hard constraint (see module docstring).
 AGENT_GROUP: dict[AgentId, ModelGroup] = {
     "triager": "local-p40",
-    "reporter": "local-spark",
+    "historian": "local-spark",
     "note-maker": "local-p40",
     "researcher": "local-spark",
     "errand-runner": "local-p40",

@@ -31,7 +31,7 @@ slog = get_logger("graphs.fleet")
 # this for security-review cat 8 audit traceability.
 _DEFAULT_ACTION_CLASS: dict[str, ActionClass] = {
     "triager": "A",
-    "reporter": "A",
+    "historian": "A",
     "note-maker": "B",
     "researcher": "A",
     "coder": "B",

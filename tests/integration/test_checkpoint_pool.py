@@ -147,8 +147,8 @@ async def _run_graph(
     with patch.dict(
         NODES,
         {
-            "triager": _fake_triager_returning("reporter"),
-            "reporter": _fake_reporter(),
+            "triager": _fake_triager_returning("historian"),
+            "historian": _fake_reporter(),
         },
     ):
         graph = build_fleet_graph(checkpointer=saver)

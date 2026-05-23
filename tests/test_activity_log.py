@@ -25,9 +25,9 @@ def test_log_activity_creates_file_on_demand(temp_vault: Path) -> None:
 
 
 def test_log_activity_appends(temp_vault: Path) -> None:
-    log_activity("reporter", "t-1", action_class="A", summary="first")
-    log_activity("reporter", "t-2", action_class="A", summary="second")
-    body = (temp_vault / "agents" / "reporter" / "memory" / "activity-log.md").read_text()
+    log_activity("historian", "t-1", action_class="A", summary="first")
+    log_activity("historian", "t-2", action_class="A", summary="second")
+    body = (temp_vault / "agents" / "historian" / "memory" / "activity-log.md").read_text()
     assert "first" in body and "second" in body
     assert body.count("- ") == 2
 

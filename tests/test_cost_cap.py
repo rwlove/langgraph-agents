@@ -84,7 +84,7 @@ def _reset_clients() -> None:
 def test_global_claude_spend_usd_sums_claude_group_only() -> None:
     """Helper sums only ``group="claude"`` samples; local-* is excluded."""
     langgraph_cost_usd_total.labels(agent="coder", group="claude", model="claude-opus-4-7").inc(2.5)
-    langgraph_cost_usd_total.labels(agent="reporter", group="claude", model="claude-opus-4-7").inc(
+    langgraph_cost_usd_total.labels(agent="historian", group="claude", model="claude-opus-4-7").inc(
         1.25
     )
     # Local groups don't usually incur cost, but if a downstream emitter
@@ -140,7 +140,7 @@ def test_build_claude_raises_global_daily_above_threshold(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("COST_CAP_GLOBAL_DAILY_USD", "5.0")
 
-    langgraph_cost_usd_total.labels(agent="reporter", group="claude", model="claude-opus-4-7").inc(
+    langgraph_cost_usd_total.labels(agent="historian", group="claude", model="claude-opus-4-7").inc(
         7.5
     )
 
@@ -213,14 +213,14 @@ def test_per_agent_daily_cap_isolates_per_agent(
     monkeypatch.setenv("COST_CAP_PER_TASK_USD", "1000.0")
 
     # Reporter blew its budget but coder hasn't spent anything yet.
-    record_task_spend(task_id="task-A", agent="reporter", cost_usd=5.0)
+    record_task_spend(task_id="task-A", agent="historian", cost_usd=5.0)
 
     with patch("agents.llm.service_healthy", return_value=False):
         model = llm("coder", escalate=True)
 
     assert isinstance(model, ChatAnthropic)
     # And the per-agent getter reflects only `reporter`'s spend, not coder's.
-    assert agent_daily_spend_usd("reporter") == pytest.approx(5.0)
+    assert agent_daily_spend_usd("historian") == pytest.approx(5.0)
     assert agent_daily_spend_usd("coder") == 0.0
 
 
@@ -291,7 +291,7 @@ def test_per_task_cap_skipped_when_task_id_missing(
 
     # An untracked spend exists in _task_spend under some key, but the
     # contextvar isn't bound — the per-task check shouldn't peek at it.
-    record_task_spend(task_id="task-OTHER", agent="reporter", cost_usd=10.0)
+    record_task_spend(task_id="task-OTHER", agent="historian", cost_usd=10.0)
     # Verify nothing is bound.
     assert "task_id" not in structlog.contextvars.get_contextvars()
 
@@ -343,10 +343,10 @@ def test_record_task_spend_updates_both_accumulators() -> None:
 
 def test_record_task_spend_skips_per_task_when_task_id_none() -> None:
     """task_id=None updates only per-agent-daily; no spurious entry created."""
-    record_task_spend(task_id=None, agent="reporter", cost_usd=0.50)
+    record_task_spend(task_id=None, agent="historian", cost_usd=0.50)
 
     assert task_spend_usd(None) == 0.0
-    assert agent_daily_spend_usd("reporter") == pytest.approx(0.50)
+    assert agent_daily_spend_usd("historian") == pytest.approx(0.50)
 
 
 def test_record_task_spend_ignores_zero_and_negative_cost() -> None:

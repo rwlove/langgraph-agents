@@ -60,5 +60,5 @@ def test_client_refuses_out_of_scope_before_http() -> None:
 
 def test_triager_reporter_reviewer_have_no_mcp() -> None:
     """These agents are vault/log-only by design."""
-    for agent_id in ("triager", "reporter", "reviewer"):
+    for agent_id in ("triager", "historian", "reviewer"):
         assert ALLOWLISTS[agent_id] == frozenset(), f"{agent_id} should have no MCP capabilities"
