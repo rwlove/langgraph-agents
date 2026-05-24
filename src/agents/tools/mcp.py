@@ -115,6 +115,18 @@ _READ_ONLY_SEARXNG: tuple[MCPCapability, ...] = (
     MCPCapability("searxng-mcp", "search", write=False),
 )
 
+# Smoke-test pseudo-capability. The server name "smoke" is NOT a real MCP
+# server — errand-runner intercepts targets prefixed with "smoke." before
+# the MCPGatewayClient call and runs a filesystem self-verifying smoke
+# (write → readback → delete) inside the vault smoke-test directory.
+#
+# Lives in the allowlist so the same gating path (HMAC verify + Class
+# check + scope check) exercises the production approval flow end-to-end.
+# Triggered via POST /admin/smoke/start-approval.
+_SMOKE_TEST: tuple[MCPCapability, ...] = (
+    MCPCapability("smoke", "test_write", write=True),
+)
+
 
 # Map agent_id → frozenset of allowed capabilities.
 # Adding/removing a capability is an explicit code change reviewable in PR.
@@ -133,6 +145,7 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         + _READ_ONLY_KUBECTL
         + _READ_ONLY_PROMETHEUS
         + _READ_ONLY_GRAFANA
+        + _SMOKE_TEST  # smoke approval-flow verification (filesystem, not MCP)
     ),
     "supervisor": frozenset(
         _READ_ONLY_KUBECTL + _READ_ONLY_PROMETHEUS + _READ_ONLY_GRAFANA
