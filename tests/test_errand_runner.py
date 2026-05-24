@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -333,3 +334,140 @@ def test_interrupt_resume_deferred_returns_deferred_output(temp_vault: Path) -> 
         final = graph.invoke(Command(resume=resume_value), config=config)
 
     assert "deferred by rob" in final["output"]
+
+
+# ---------------------------------------------------------------------------
+# Smoke-test branch (approval-flow verification)
+# ---------------------------------------------------------------------------
+#
+# The smoke branch in errand_runner intercepts approval_request.target =
+# "smoke.test_write" BEFORE the MCP call. Its job is to validate the
+# HMAC-verify path + interrupt/resume cycle without involving a real MCP
+# server. These tests assert that:
+#
+#   1) The smoke path runs only when target is "smoke.test_write" and all
+#      the production gates (allowlist, HMAC, Class C undo_path) pass.
+#   2) The smoke result envelope is JSON with the expected schema.
+#   3) write→readback→delete actually touches the filesystem.
+#   4) An invalid HMAC short-circuits BEFORE the smoke runs (no fs writes).
+
+
+def test_smoke_path_writes_readback_deletes(
+    temp_vault: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: valid approval + valid HMAC + smoke.test_write target."""
+    smoke_dir = tmp_path / "smoke"
+    monkeypatch.setenv("VAULT_SMOKE_DIR", str(smoke_dir))
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
+    get_settings.cache_clear()
+
+    token = _signed_token("smoke-t-1", "C", "smoke", "test_write", "test-secret")
+    state = FleetState(
+        task_id="smoke-t-1",
+        source="test",
+        content="smoke",
+        approval_request=ApprovalRequest(
+            action_class="C",
+            target="smoke.test_write",
+            payload_summary="smoke",
+            undo_path="errand-runner deletes the file in the same step",
+            proposed_by="errand-runner",
+        ),
+        approval_granted=True,
+        approval_token=token,
+    )
+
+    result = errand_runner_node(state)
+
+    envelope = json.loads(result["output"])
+    assert envelope["write_ok"] is True
+    assert envelope["readback_ok"] is True
+    assert envelope["delete_ok"] is True
+    assert envelope["file_gone_after_delete"] is True
+    assert envelope["hmac_verify_ok"] is True
+    assert envelope["actual_content"] == envelope["expected_content"]
+    # Timings should be populated and non-negative.
+    timings = envelope["timings"]
+    for key in ("hmac_verify_ms", "fs_write_ms", "fs_readback_ms",
+                "fs_delete_ms", "smoke_total_ms"):
+        assert timings[key] >= 0.0, f"timing {key} should be >= 0"
+
+    # File path constructed under the configured smoke dir.
+    assert envelope["path"].startswith(str(smoke_dir))
+
+    # Filesystem is clean post-run (cleanup ran).
+    assert list(smoke_dir.glob("smoke-*.md")) == []
+
+
+def test_smoke_short_circuits_on_invalid_hmac(
+    temp_vault: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid HMAC must reject BEFORE any filesystem write.
+
+    Load-bearing assertion: this is the drift-catch we built the whole
+    smoke for. If HMAC verify is wrong, the fs side effects MUST NOT run.
+    """
+    smoke_dir = tmp_path / "smoke"
+    monkeypatch.setenv("VAULT_SMOKE_DIR", str(smoke_dir))
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "real-secret")
+    get_settings.cache_clear()
+
+    # Token signed with WRONG secret — verifies against "real-secret" must fail.
+    bad_token = _signed_token("smoke-t-2", "C", "smoke", "test_write", "wrong-secret")
+    state = FleetState(
+        task_id="smoke-t-2",
+        source="test",
+        content="smoke",
+        approval_request=ApprovalRequest(
+            action_class="C",
+            target="smoke.test_write",
+            payload_summary="smoke",
+            undo_path="undo",
+            proposed_by="errand-runner",
+        ),
+        approval_granted=True,
+        approval_token=bad_token,
+    )
+
+    result = errand_runner_node(state)
+
+    # The pre-smoke HMAC-verify path returns the same "approval token invalid"
+    # message that all other targets do — proves smoke doesn't have a
+    # separate (potentially buggier) verify path.
+    assert "approval token invalid" in result["output"]
+    # And critically — no files were written under the smoke dir.
+    if smoke_dir.exists():
+        assert list(smoke_dir.iterdir()) == []
+
+
+def test_smoke_refuses_when_not_in_allowlist(
+    temp_vault: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sanity check: the smoke capability is gated by the same allowlist
+    mechanism as everything else. A typo'd target like 'smoke.bad_method'
+    must be rejected at the scope check, BEFORE HMAC verify even runs."""
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
+    get_settings.cache_clear()
+
+    state = FleetState(
+        task_id="smoke-t-3",
+        source="test",
+        content="smoke",
+        approval_request=ApprovalRequest(
+            action_class="C",
+            target="smoke.bad_method",  # NOT in errand-runner's allowlist
+            payload_summary="smoke",
+            undo_path="undo",
+            proposed_by="errand-runner",
+        ),
+        approval_granted=True,
+        approval_token="anything-valid-looking:" + "0" * 64,
+    )
+
+    result = errand_runner_node(state)
+    assert "not in allowlist" in result["output"]

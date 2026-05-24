@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents.paused_threads import (
     DEFAULT_STALE_AFTER_SECONDS,
@@ -23,7 +23,7 @@ from agents.paused_threads import (
 )
 from agents.personas import load_identity
 from agents.settings import get_settings
-from agents.state import ALL_AGENT_IDS, TimeoutTier
+from agents.state import ALL_AGENT_IDS, ApprovalRequest, FleetState, TimeoutTier
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -530,3 +530,107 @@ async def delete_dlq_entry(task_id: str, request: Request) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail=f"dlq entry {task_id!r} not found")
     return {"task_id": task_id, "status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Smoke approval-flow endpoint
+# ---------------------------------------------------------------------------
+#
+# `POST /admin/smoke/start-approval` starts a self-verifying smoke run that
+# exercises the production approval flow (interrupt → ntfy → user tap →
+# /approval resume → HMAC verify) without touching any real MCP server.
+#
+# Operator workflow:
+#   1. POST /admin/smoke/start-approval  → returns {task_id}
+#   2. (Windmill's langgraph-approval-post sweep sees the interrupt and
+#      pushes the ntfy + magic link to the operator's phone)
+#   3. Operator taps the magic link → /approval resumes the graph
+#   4. errand-runner runs the smoke branch, writes JSON result envelope
+#      into state.output
+#   5. Driver polls GET /admin/tasks/<task_id> → reads `output` JSON
+#
+# The smoke graph (graphs/smoke.py) is single-node: START → errand-runner
+# → END. It bypasses triager/supervisor so the only LLM cost is whatever
+# errand-runner runs in its own node — currently zero (errand-runner is
+# pure verification + execution).
+
+
+class SmokeStartRequest(BaseModel):
+    """Optional configuration for a smoke run.
+
+    All fields default — POSTing `{}` is sufficient. The Windmill driver
+    only needs the task_id back, which the endpoint generates.
+    """
+
+    label: str = Field(
+        default="smoke",
+        description=(
+            "Operator-supplied label appended to the generated task_id. "
+            "Useful for distinguishing multiple smoke runs in admin logs."
+        ),
+        max_length=32,
+        pattern=r"^[a-zA-Z0-9_\-]+$",
+    )
+
+
+class SmokeStartResponse(BaseModel):
+    task_id: str
+    status: str = "interrupted"
+    note: str = (
+        "Graph paused at errand-runner. Approve via the ntfy magic link "
+        "(Windmill langgraph-approval-post will push it). Poll "
+        "/admin/tasks/<task_id> for the smoke result envelope."
+    )
+
+
+@router.post("/smoke/start-approval", response_model=SmokeStartResponse)
+async def start_smoke_approval(
+    req: SmokeStartRequest, request: Request
+) -> SmokeStartResponse:
+    """Start a smoke-test approval flow run.
+
+    Constructs a synthetic ApprovalRequest targeting the `smoke.test_write`
+    pseudo-server, invokes the single-node smoke graph, and returns
+    once the graph hits the interrupt at errand-runner. The rest of the
+    flow (ntfy push, magic link, user tap, resume, HMAC verify, smoke
+    write/readback/delete) happens through the same production code paths
+    a real Class-C action takes.
+    """
+    smoke_graph = getattr(request.app.state, "smoke_graph", None)
+    if smoke_graph is None:
+        raise HTTPException(status_code=503, detail="smoke graph not initialized")
+
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    task_id = f"smoke-{req.label}-{ts}"
+
+    approval_request = ApprovalRequest(
+        action_class="C",
+        target="smoke.test_write",
+        payload_summary=(
+            f"SMOKE TEST: write+readback+delete a marker file under "
+            f"<vault_smoke_dir>/smoke-{task_id}.md. No external side effects."
+        ),
+        undo_path="errand-runner deletes the file in the same step",
+        proposed_by="errand-runner",
+        cost_estimate_usd=0.0,
+    )
+
+    initial_state = FleetState(
+        task_id=task_id,
+        source="test",
+        content=(
+            "Synthetic smoke test of the approval flow. The HMAC verify "
+            "of the resume token is the load-bearing assertion."
+        ),
+        approval_request=approval_request,
+        approval_granted=None,  # forces the interrupt path
+    )
+
+    config = {"configurable": {"thread_id": task_id}}
+
+    # ainvoke returns when the graph hits the interrupt at errand-runner.
+    # No exception is raised — the graph is paused and waiting for a
+    # `Command(resume=...)` to come in via /approval.
+    await smoke_graph.ainvoke(initial_state.model_dump(), config=config)
+
+    return SmokeStartResponse(task_id=task_id)

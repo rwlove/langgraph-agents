@@ -25,6 +25,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from agents.api import admin, approval, auth, chat_completions, health, inbox, todos
 from agents.graphs.fleet import build_fleet_graph
+from agents.graphs.smoke import build_smoke_graph
 from agents.idempotency import DedupStore
 from agents.memory_store import MCPMemoryStore, build_pool
 from agents.observability import (
@@ -264,6 +265,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         admin_checkpointer = await _build_checkpointer(stack)
         app.state.admin_graph = build_fleet_graph(
             checkpointer=admin_checkpointer, store=None
+        )
+
+        # Smoke graph — START → errand-runner → END. Used by the
+        # `POST /admin/smoke/start-approval` endpoint to exercise the
+        # production approval-flow plumbing (interrupt → ntfy → resume
+        # → HMAC verify) without dragging triager/supervisor through
+        # it. Shares the main checkpointer so smoke runs are durably
+        # resumable via the same `/approval` endpoint that resumes
+        # production interrupts; no separate Postgres connection
+        # pressure since smoke runs are operator-triggered and rare.
+        app.state.smoke_graph = build_smoke_graph(
+            checkpointer=checkpointer, store=None
         )
         # Phase 3.G: idempotency dedup store backed by Dragonfly.
         # Constructed lazily — first connect happens on first /inbox

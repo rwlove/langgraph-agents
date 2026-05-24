@@ -9,7 +9,8 @@ Hard constraints (architectural):
 - No `git push` to home-ops without homelab-engineer's proposal
 - No VPN-gateway operations (LAN-only per security review)
 - No medical-system writes — health-tracker is read-only by design
-- No personal-vault writes
+- No personal-vault writes — except the smoke-test marker under
+  `settings.vault_smoke_dir` (filesystem-only path; see _run_smoke).
 """
 
 from __future__ import annotations
@@ -17,11 +18,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import time
+from pathlib import Path
 from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.types import interrupt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents.llm import llm
 from agents.personas import load_persona
@@ -32,6 +35,11 @@ from agents.tools.mcp import MCPGatewayClient, MCPPermissionError, is_allowed
 _AGENT_ID: AgentId = "errand-runner"
 _TEMPERATURE = 0.0  # deterministic — we're verifying + executing, not generating
 
+# Smoke-test pseudo-server. Any approval_request.target with this prefix is
+# intercepted before the MCPGatewayClient call and routed to the in-process
+# filesystem smoke implementation. See _run_smoke.
+_SMOKE_SERVER = "smoke"
+
 Outcome = Literal["executed", "rejected", "preflight-failed", "no-approval", "deferred"]
 
 
@@ -41,6 +49,35 @@ class ExecutionResult(BaseModel):
     server: str | None = None
     method: str | None = None
     payload_hash: str | None = None
+
+
+class SmokeTimings(BaseModel):
+    """Per-step millisecond timings for the smoke-execution path."""
+
+    hmac_verify_ms: float = 0.0
+    fs_write_ms: float = 0.0
+    fs_readback_ms: float = 0.0
+    fs_delete_ms: float = 0.0
+    smoke_total_ms: float = 0.0
+
+
+class SmokeResult(BaseModel):
+    """Self-verifying smoke outcome — emitted as JSON in `state.output`.
+
+    `hmac_verify_ok` is the load-bearing assertion. The smoke test exists to
+    catch silent drift between Windmill's signing key/algorithm and this
+    node's verifier; if hmac_verify_ok is True, the two ends agree.
+    """
+
+    path: str
+    expected_content: str
+    actual_content: str | None = None
+    write_ok: bool = False
+    readback_ok: bool = False
+    delete_ok: bool = False
+    file_gone_after_delete: bool = False
+    hmac_verify_ok: bool = False
+    timings: SmokeTimings = Field(default_factory=SmokeTimings)
 
 
 def _payload_hash(payload: dict[str, Any]) -> str:
@@ -85,6 +122,91 @@ def _build_llm() -> BaseChatModel:
     """Used only when the inbound request needs interpretation. Most invocations
     bypass the LLM and go straight to verify + execute."""
     return llm(_AGENT_ID, temperature=_TEMPERATURE)
+
+
+def _run_smoke(
+    state: FleetState,
+    *,
+    hmac_verify_ms: float,
+    hmac_ok: bool,
+) -> dict[str, Any]:
+    """Filesystem self-verifying smoke for the approval flow.
+
+    Triggered by `approval_request.target == "smoke.test_write"`. Bypasses
+    the MCPGatewayClient entirely — the goal is to validate the production
+    HMAC-verify path and the LangGraph interrupt/resume cycle, NOT to test
+    a real MCP server. See graphs/smoke.py for the entry-point rationale.
+
+    Path safety: writes ONLY to ``<vault_smoke_dir>/smoke-<task_id>.md``.
+    The directory is created on first use; the filename is derived from
+    state.task_id (the only operator-supplied input that reaches here).
+    All other path components are constants from settings — there is no
+    way for the caller to redirect the write outside vault_smoke_dir.
+
+    The result is JSON-serialized into `state.output` so the
+    `langgraph-smoke-approval-flow` Windmill workflow can read it back via
+    `/admin/tasks/<id>` and surface timings + pass/fail per step.
+    """
+    settings = get_settings()
+    smoke_dir = Path(settings.vault_smoke_dir)
+    smoke_dir.mkdir(parents=True, exist_ok=True)
+
+    # task_id is constrained by the API (single-line string, length-limited).
+    # Reject anything path-shaped defensively — same `Path.name` discipline
+    # the activity-log writer uses.
+    safe_id = Path(state.task_id).name
+    target_path = smoke_dir / f"smoke-{safe_id}.md"
+    expected_content = (
+        f"smoke-test marker\ntask_id: {safe_id}\nwritten_by: errand-runner\n"
+    )
+
+    result = SmokeResult(
+        path=str(target_path),
+        expected_content=expected_content,
+        hmac_verify_ok=hmac_ok,
+        timings=SmokeTimings(hmac_verify_ms=hmac_verify_ms),
+    )
+
+    smoke_start = time.perf_counter()
+
+    # 1) write
+    write_start = time.perf_counter()
+    try:
+        target_path.write_text(expected_content, encoding="utf-8")
+        result.write_ok = True
+    except OSError:
+        result.write_ok = False
+    result.timings.fs_write_ms = (time.perf_counter() - write_start) * 1000.0
+
+    # 2) readback
+    if result.write_ok:
+        readback_start = time.perf_counter()
+        try:
+            actual = target_path.read_text(encoding="utf-8")
+            result.actual_content = actual
+            result.readback_ok = actual == expected_content
+        except OSError:
+            result.readback_ok = False
+        result.timings.fs_readback_ms = (time.perf_counter() - readback_start) * 1000.0
+
+    # 3) delete (always attempt, even if write/readback failed — cleanup)
+    delete_start = time.perf_counter()
+    try:
+        target_path.unlink(missing_ok=True)
+        result.delete_ok = True
+    except OSError:
+        result.delete_ok = False
+    result.timings.fs_delete_ms = (time.perf_counter() - delete_start) * 1000.0
+
+    # 4) verify file is actually gone
+    result.file_gone_after_delete = not target_path.exists()
+
+    result.timings.smoke_total_ms = (time.perf_counter() - smoke_start) * 1000.0
+
+    # Serialize the full result envelope into state.output. The Windmill
+    # driver reads this back via `/admin/tasks/<id>` and surfaces it to the
+    # operator. JSON keeps the schema explicit; prose would lose timings.
+    return {"output": result.model_dump_json()}
 
 
 def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
@@ -180,21 +302,45 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
     # Signed-token verification — shared HMAC with Windmill's approval-receive workflow.
     # `approval_token` is sourced from the resume verdict if we paused here,
     # otherwise from inbound state (back-compat with pre-approved test paths).
+    #
+    # The verification is timed for the smoke branch below — when the smoke
+    # path runs, the HMAC verify latency is the only measurement that's
+    # actually meaningful for catching TS-vs-Python drift (the rest of the
+    # smoke is local filesystem). The same `_verify_approval_token` runs in
+    # both the smoke and real paths; we time it explicitly so the smoke
+    # result envelope can record it.
     signing_secret = settings.langgraph_approval_signing_key or ""
-    if not _verify_approval_token(
+    hmac_verify_start = time.perf_counter()
+    hmac_ok = _verify_approval_token(
         approval_token or "",
         task_id=state.task_id,
         action_class=req.action_class,
         server=server,
         method=method,
         signing_secret=signing_secret,
-    ):
+    )
+    hmac_verify_ms = (time.perf_counter() - hmac_verify_start) * 1000.0
+    if not hmac_ok:
         return {
             "output": (
                 f"errand-runner: approval token invalid for "
                 f"{state.task_id}|{req.action_class}|{server}|{method}"
             ),
         }
+
+    # Smoke-test branch — intercepts before MCP. The smoke pseudo-server has
+    # no MCPGatewayClient route; instead the request is satisfied by an
+    # in-process filesystem write+readback+delete cycle that exercises the
+    # full approval-flow plumbing (interrupt → ntfy → user → /approval →
+    # resume → HMAC verify) without touching any real MCP server. The smoke
+    # capability is gated by the same allowlist mechanism as everything
+    # else (`smoke.test_write` is in errand-runner's allowlist in mcp.py).
+    if server == _SMOKE_SERVER:
+        return _run_smoke(
+            state,
+            hmac_verify_ms=hmac_verify_ms,
+            hmac_ok=hmac_ok,
+        )
 
     # Pre-flight: undo_path is required for Class C; absent → escalate to D.
     if req.undo_path is None and req.action_class == "C":

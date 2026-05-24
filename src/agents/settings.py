@@ -27,6 +27,16 @@ class Settings(BaseSettings):
         default=Path.home() / "vaults" / "claude",
         description="Root of the claude vault. In cluster this is a PVC mount.",
     )
+    vault_smoke_dir: Path = Field(
+        default=Path("/tmp/langgraph-smoke"),
+        description=(
+            "Directory where errand-runner's smoke-test capability writes its "
+            "self-verifying smoke marker. In cluster, set this to a vault "
+            "subdirectory (e.g. /vault/test) that's NOT synced to Obsidian "
+            "so smoke markers don't propagate. Defaults to /tmp so tests + "
+            "local dev work without configuration. Created on first use."
+        ),
+    )
 
     # --- model providers ---
     # ollama_base_url is the legacy single-endpoint setting (pre-Spark, OpenAI
