@@ -22,6 +22,7 @@ from agents.paused_threads import (
     sweep_paused_threads,
 )
 from agents.personas import load_identity
+from agents.queue.approval_post import post_approval_for_interrupts
 from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS, ApprovalRequest, FleetState, TimeoutTier
 
@@ -632,5 +633,18 @@ async def start_smoke_approval(
     # No exception is raised — the graph is paused and waiting for a
     # `Command(resume=...)` to come in via /approval.
     await smoke_graph.ainvoke(initial_state.model_dump(), config=config)
+
+    # Fire the approval-post webhook so the operator gets the ntfy push
+    # + Zulip card with the magic link to approve. The queue worker
+    # does this automatically for queue-processed tasks; the smoke
+    # endpoint bypasses the queue (invokes smoke_graph directly), so
+    # without this explicit call the smoke would just sit in the
+    # checkpointer until `langgraph-awaiting-user-sweep.ts` caught it
+    # 30 minutes later. See PR #86 for the bug history.
+    await post_approval_for_interrupts(
+        smoke_graph,
+        task_id,
+        content=initial_state.content,
+    )
 
     return SmokeStartResponse(task_id=task_id)

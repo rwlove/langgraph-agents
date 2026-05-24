@@ -23,6 +23,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from agents.queue.approval_post import post_approval_for_interrupts
 from agents.queue.worker import QueueWorker
 from agents.settings import get_settings
 
@@ -230,9 +231,10 @@ def test_approval_post_payload_includes_content(monkeypatch: pytest.MonkeyPatch)
     worker = _build_worker(_FakeGraph(snapshot))
 
     asyncio.run(
-        worker._post_approval_for_interrupts(
+        post_approval_for_interrupts(
+            worker._graph,
             "01J-task",
-            {"content": "deploy the coder model"},
+            content="deploy the coder model",
         )
     )
 
