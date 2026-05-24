@@ -76,7 +76,25 @@ Mode = Literal["architect", "debugger", "optimizer", "default"]
 
 ActionClass = Literal["A", "B", "C", "D"]
 
-Source = Literal["voice", "zulip", "text", "holmesgpt", "test", "openwebui", "cli"]
+Source = Literal[
+    "voice",
+    "zulip",
+    "text",
+    "holmesgpt",
+    "test",
+    "openwebui",
+    "cli",
+    # `scheduled` — added 2026-05-24 after the storage-weekly Path-2
+    # smoke caught that cron-fired workflows were 422-ing at /inbox.
+    # Six Windmill flows had been emitting `source: "scheduled"`
+    # (PR-E historian pin + PR-F reviewer + PR-I storage + PR-J ml/
+    # network/observability) but the literal hadn't been widened.
+    # Strictly speaking this overlaps with `origin: "scheduled"`
+    # (HOMELAB-SPEC Layer 5 task envelope), but the existing inbox
+    # callers populate `source` not `origin`, so we widen Source to
+    # match reality and keep the env contract stable.
+    "scheduled",
+]
 
 TimeoutTier = Literal["30min", "4h", "7d"]
 
