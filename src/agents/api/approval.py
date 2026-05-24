@@ -38,15 +38,36 @@ class ApprovalResponse(BaseModel):
 
 @router.post("/approval", response_model=ApprovalResponse)
 async def post_approval(req: ApprovalRequest, request: Request) -> ApprovalResponse:
-    graph = request.app.state.graph
+    # Pick the graph that originally invoked the interrupt. Smoke runs use
+    # the single-node `smoke_graph` (START → errand-runner → END); production
+    # tasks use the full `fleet_graph` (which ends with reporter). Resuming
+    # on the wrong graph means the reporter renders the smoke's structured
+    # JSON output into prose (lost timings) OR a fleet task tries to run
+    # on the smoke graph and hits an unregistered-node error mid-resume.
+    #
+    # Discriminator: smoke task_ids are minted by /admin/smoke/start-approval
+    # with the prefix `smoke-`. Anything else is a production task.
+    if req.task_id.startswith("smoke-"):
+        graph = getattr(request.app.state, "smoke_graph", None)
+        graph_name = "smoke_graph"
+    else:
+        graph = request.app.state.graph
+        graph_name = "fleet_graph"
+
     if graph is None:
-        raise HTTPException(status_code=503, detail="graph not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail=f"{graph_name} not initialized",
+        )
 
     # Bind contextvars so every structlog event during the resume carries
     # the task_id + actor + reaction. Same async-task-scoped binding pattern
     # used in `api/inbox.py`; lives for the duration of this request handler.
     structlog.contextvars.bind_contextvars(
-        task_id=req.task_id, actor=req.actor, reaction=req.reaction
+        task_id=req.task_id,
+        actor=req.actor,
+        reaction=req.reaction,
+        graph=graph_name,
     )
     slog.info("approval_received")
 
