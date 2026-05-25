@@ -264,6 +264,80 @@ async def cancel_task(task_id: str, body: CancelBody, request: Request) -> dict[
     return {"task_id": task_id, "status": "cancelled", "reason": body.reason}
 
 
+# ---- task usage stats ----
+
+
+class UsageStats(BaseModel):
+    """Task completion counts over the requested window.
+
+    by_agent and by_source are derived from the task_queue table.
+    target_agent is sourced from ``envelope->>'target_agent'`` — the
+    triager writes it back to the envelope on claim, so done rows
+    almost always carry it. The rare ``""`` / missing value is grouped
+    under ``"(unknown)"``.
+
+    # TODO: add model/local vs claude column when provenance lands
+    """
+
+    days: int
+    total_tasks: int
+    by_agent: dict[str, int]
+    by_source: dict[str, int]
+
+
+@router.get("/cost", response_model=UsageStats)
+async def get_usage_stats(request: Request, days: int = 7) -> UsageStats:
+    """Task completion counts broken down by agent and source.
+
+    Queries ``task_queue`` for rows with ``status='done'`` and
+    ``created_at > NOW() - INTERVAL 'N days'``. ``target_agent`` is
+    read from ``envelope->>'target_agent'`` (the triager stamps it on
+    claim). ``source`` is from ``envelope->>'source'``.
+
+    Phase 5 stub: Claude token spend is not yet tracked here — Langfuse
+    integration lands in a later phase. For now this gives count-level
+    visibility into task throughput by agent and ingress source.
+    """
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+
+    pool = request.app.state.queue_pool
+    if pool is None:
+        raise HTTPException(status_code=503, detail="queue pool not initialized")
+
+    async with pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(envelope->>'target_agent', ''), '(unknown)') AS agent,
+                COALESCE(NULLIF(envelope->>'source', ''), '(unknown)') AS source,
+                COUNT(*) AS cnt
+            FROM task_queue
+            WHERE status = 'done'
+              AND created_at > NOW() - make_interval(days => %s)
+            GROUP BY agent, source
+            """,
+            (days,),
+        )
+        rows = await cur.fetchall()
+
+    by_agent: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    total = 0
+    for agent, source, cnt in rows:
+        n = int(cnt)
+        by_agent[agent] = by_agent.get(agent, 0) + n
+        by_source[source] = by_source.get(source, 0) + n
+        total += n
+
+    return UsageStats(
+        days=days,
+        total_tasks=total,
+        by_agent=dict(sorted(by_agent.items(), key=lambda x: x[1], reverse=True)),
+        by_source=dict(sorted(by_source.items(), key=lambda x: x[1], reverse=True)),
+    )
+
+
 # ---- cost cap ----
 
 

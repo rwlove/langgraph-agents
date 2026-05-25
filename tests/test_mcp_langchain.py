@@ -61,6 +61,191 @@ async def test_auditor_gets_curated_subset() -> None:
 
 
 @pytest.mark.asyncio
+async def test_network_operator_gets_curated_subset() -> None:
+    """network-operator gets Omada + Netbox read-only tools; no write tools."""
+    fake_catalog = [
+        _fake_tool("omada_listSites"),
+        _fake_tool("omada_listDevices"),
+        _fake_tool("omada_getSsidList"),
+        _fake_tool("omada_getLanNetworkList"),
+        _fake_tool("omada_getGatewayWanStatus"),
+        _fake_tool("omada_getFirewallSetting"),
+        _fake_tool("omada_listSiteAlerts"),
+        _fake_tool("omada_listSiteEvents"),
+        _fake_tool("netbox_netbox_get_objects"),
+        _fake_tool("netbox_netbox_search_objects"),
+        _fake_tool("netbox_netbox_get_object_by_id"),
+        _fake_tool("omada_setFirewallRule"),   # write — NOT in set
+        _fake_tool("kubectl_get_pods"),        # kubectl — NOT in network-operator set
+    ]
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        new=AsyncMock(return_value=fake_catalog),
+    ):
+        tools = await mcp_langchain.build_mcp_tools_for_agent("network-operator")
+    names = sorted(t.name for t in tools)
+    assert names == [
+        "netbox_netbox_get_object_by_id",
+        "netbox_netbox_get_objects",
+        "netbox_netbox_search_objects",
+        "omada_getFirewallSetting",
+        "omada_getGatewayWanStatus",
+        "omada_getLanNetworkList",
+        "omada_getSsidList",
+        "omada_listDevices",
+        "omada_listSiteAlerts",
+        "omada_listSiteEvents",
+        "omada_listSites",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_storage_operator_gets_curated_subset() -> None:
+    """storage-operator gets kubectl PVC/PV/StorageClass + supporting tools."""
+    fake_catalog = [
+        _fake_tool("kubectl_get_pvcs"),
+        _fake_tool("kubectl_get_persistent_volumes"),
+        _fake_tool("kubectl_get_storage_classes"),
+        _fake_tool("kubectl_get_pods"),
+        _fake_tool("kubectl_get_deployments"),
+        _fake_tool("kubectl_get_namespaces"),
+        _fake_tool("kubectl_describe"),
+        _fake_tool("kubectl_get_events"),
+        _fake_tool("kubectl_delete_pvc"),     # write — NOT in set
+        _fake_tool("grafana_query_prometheus"),  # observability — NOT in set
+    ]
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        new=AsyncMock(return_value=fake_catalog),
+    ):
+        tools = await mcp_langchain.build_mcp_tools_for_agent("storage-operator")
+    names = sorted(t.name for t in tools)
+    assert names == [
+        "kubectl_describe",
+        "kubectl_get_deployments",
+        "kubectl_get_events",
+        "kubectl_get_namespaces",
+        "kubectl_get_persistent_volumes",
+        "kubectl_get_pods",
+        "kubectl_get_pvcs",
+        "kubectl_get_storage_classes",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_observability_operator_gets_curated_subset() -> None:
+    """observability-operator gets Grafana/Prometheus/Loki + kubectl supplement."""
+    fake_catalog = [
+        _fake_tool("grafana_query_prometheus"),
+        _fake_tool("grafana_list_prometheus_metric_names"),
+        _fake_tool("grafana_query_loki_logs"),
+        _fake_tool("grafana_list_loki_label_names"),
+        _fake_tool("grafana_get_alert_group"),
+        _fake_tool("grafana_list_alert_groups"),
+        _fake_tool("grafana_search_dashboards"),
+        _fake_tool("grafana_get_dashboard_summary"),
+        _fake_tool("kubectl_get_pods"),
+        _fake_tool("kubectl_get_events"),
+        _fake_tool("grafana_create_dashboard"),   # write — NOT in set
+        _fake_tool("ha_ha_get_state"),            # HA — NOT in set
+    ]
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        new=AsyncMock(return_value=fake_catalog),
+    ):
+        tools = await mcp_langchain.build_mcp_tools_for_agent("observability-operator")
+    names = sorted(t.name for t in tools)
+    assert names == [
+        "grafana_get_alert_group",
+        "grafana_get_dashboard_summary",
+        "grafana_list_alert_groups",
+        "grafana_list_loki_label_names",
+        "grafana_list_prometheus_metric_names",
+        "grafana_query_loki_logs",
+        "grafana_query_prometheus",
+        "grafana_search_dashboards",
+        "kubectl_get_events",
+        "kubectl_get_pods",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_homelab_engineer_gets_curated_subset() -> None:
+    """homelab-engineer gets the broadest kubectl surface of all operators."""
+    fake_catalog = [
+        _fake_tool("kubectl_get_pods"),
+        _fake_tool("kubectl_get_deployments"),
+        _fake_tool("kubectl_get_namespaces"),
+        _fake_tool("kubectl_get_nodes"),
+        _fake_tool("kubectl_describe"),
+        _fake_tool("kubectl_get_events"),
+        _fake_tool("kubectl_get_logs"),
+        _fake_tool("kubectl_health_check"),
+        _fake_tool("kubectl_get_statefulsets"),
+        _fake_tool("kubectl_get_daemonsets"),
+        _fake_tool("kubectl_get_configmaps"),
+        _fake_tool("kubectl_get_services"),
+        _fake_tool("kubectl_delete_pod"),     # write — NOT in set
+        _fake_tool("ha_ha_call_service"),     # HA — NOT in set
+    ]
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        new=AsyncMock(return_value=fake_catalog),
+    ):
+        tools = await mcp_langchain.build_mcp_tools_for_agent("homelab-engineer")
+    names = sorted(t.name for t in tools)
+    assert names == [
+        "kubectl_describe",
+        "kubectl_get_configmaps",
+        "kubectl_get_daemonsets",
+        "kubectl_get_deployments",
+        "kubectl_get_events",
+        "kubectl_get_logs",
+        "kubectl_get_namespaces",
+        "kubectl_get_nodes",
+        "kubectl_get_pods",
+        "kubectl_get_services",
+        "kubectl_get_statefulsets",
+        "kubectl_health_check",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_smart_home_operator_gets_curated_subset() -> None:
+    """smart-home-operator gets read-only HA tools; no call_service write tool."""
+    fake_catalog = [
+        _fake_tool("ha_ha_get_state"),
+        _fake_tool("ha_ha_get_entity"),
+        _fake_tool("ha_ha_search_entities"),
+        _fake_tool("ha_ha_get_history"),
+        _fake_tool("ha_ha_get_logs"),
+        _fake_tool("ha_ha_get_overview"),
+        _fake_tool("ha_ha_get_system_health"),
+        _fake_tool("ha_ha_list_services"),
+        _fake_tool("ha_ha_get_device"),
+        _fake_tool("ha_ha_call_service"),   # write — NOT in set
+        _fake_tool("kubectl_get_pods"),     # kubectl — NOT in smart-home set
+    ]
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        new=AsyncMock(return_value=fake_catalog),
+    ):
+        tools = await mcp_langchain.build_mcp_tools_for_agent("smart-home-operator")
+    names = sorted(t.name for t in tools)
+    assert names == [
+        "ha_ha_get_device",
+        "ha_ha_get_entity",
+        "ha_ha_get_history",
+        "ha_ha_get_logs",
+        "ha_ha_get_overview",
+        "ha_ha_get_state",
+        "ha_ha_get_system_health",
+        "ha_ha_list_services",
+        "ha_ha_search_entities",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_agent_without_curated_set_gets_empty_list() -> None:
     """Agents not in `_AGENT_TOOL_NAMES` get no tools (intentional v1 scope)."""
     # No catalog discovery should happen — early return.
