@@ -6,9 +6,10 @@ routing target must resolve to a registered node.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Coroutine, Hashable
 from typing import Any, cast
 
 import structlog
@@ -54,17 +55,62 @@ _DEFAULT_ACTION_CLASS: dict[str, ActionClass] = {
 }
 
 
-def _with_activity_log(agent_id: AgentId, fn: Callable[[FleetState], dict[str, Any]]) -> Any:
+def _with_activity_log(
+    agent_id: AgentId,
+    fn: Callable[[FleetState], dict[str, Any] | Coroutine[Any, Any, dict[str, Any]]],
+) -> Any:
     """Wrap a node so each invocation logs to the per-agent activity log.
 
     Best-effort: if the log write fails (vault unmounted, perms, etc.) we
     log a warning but never raise — the agent run shouldn't die over an
     audit-trail write failure.
 
+    Handles both sync and async node functions — returns an async wrapper
+    when `fn` is a coroutine function (e.g. auditor_node) so LangGraph's
+    async runner can await it correctly.
+
     Return type is `Any` (via cast) because LangGraph's `add_node` overload
     set uses internal `_Node` protocols that a plain Callable doesn't match
     under strict mypy. The runtime accepts any callable.
     """
+
+    def _log_end(state: FleetState, result: dict[str, Any], t0: float, token: Any) -> dict[str, Any]:
+        duration_s = time.perf_counter() - t0
+        output = str(result.get("output", "") or "")[:200]
+        outcome = "success" if "CANCELLED" not in output else "error"
+        slog.info("node_end", outcome=outcome, output_preview=output[:80], duration_s=duration_s)
+        try:
+            log_activity(
+                agent_id,
+                state.task_id,
+                action_class=_DEFAULT_ACTION_CLASS.get(agent_id, "A"),
+                summary=output or "(no output)",
+                outcome=outcome,
+            )
+        except Exception as exc:
+            logger.warning("activity log write failed for %s: %s", agent_id, exc)
+        structlog.contextvars.reset_contextvars(**token)
+        return result
+
+    if inspect.iscoroutinefunction(fn):
+        async def async_wrapper(state: FleetState) -> dict[str, Any]:
+            token = structlog.contextvars.bind_contextvars(agent=agent_id)
+            slog.info("node_start")
+            t0 = time.perf_counter()
+            try:
+                result = await fn(state)
+            except Exception as exc:
+                slog.warning(
+                    "node_error",
+                    error_type=type(exc).__name__,
+                    duration_s=time.perf_counter() - t0,
+                )
+                structlog.contextvars.reset_contextvars(**token)
+                raise
+            return _log_end(state, result, t0, token)
+
+        async_wrapper.__name__ = fn.__name__
+        return cast(Any, async_wrapper)
 
     def wrapper(state: FleetState) -> dict[str, Any]:
         # Bind `agent` on structlog contextvars so any structlog event the
@@ -87,27 +133,7 @@ def _with_activity_log(agent_id: AgentId, fn: Callable[[FleetState], dict[str, A
             )
             structlog.contextvars.reset_contextvars(**token)
             raise
-        duration_s = time.perf_counter() - t0
-        output = str(result.get("output", "") or "")[:200]
-        outcome = "success" if "CANCELLED" not in output else "error"
-        slog.info(
-            "node_end",
-            outcome=outcome,
-            output_preview=output[:80],
-            duration_s=duration_s,
-        )
-        try:
-            log_activity(
-                agent_id,
-                state.task_id,
-                action_class=_DEFAULT_ACTION_CLASS.get(agent_id, "A"),
-                summary=output or "(no output)",
-                outcome=outcome,
-            )
-        except Exception as exc:
-            logger.warning("activity log write failed for %s: %s", agent_id, exc)
-        structlog.contextvars.reset_contextvars(**token)
-        return result
+        return _log_end(state, result, t0, token)  # type: ignore[arg-type]
 
     wrapper.__name__ = fn.__name__
     return cast(Any, wrapper)
