@@ -47,6 +47,7 @@ import structlog
 from langchain_core.callbacks import BaseCallbackHandler
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler as LangfuseLangchainCallback
+from langfuse.types import TraceContext
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -590,7 +591,7 @@ def init_langfuse() -> None:
     _LANGFUSE_LOGGER.info("langfuse client initialized (host=%s)", settings.langfuse_host)
 
 
-def langfuse_callback_handler() -> BaseCallbackHandler | None:
+def langfuse_callback_handler(agent_id: str | None = None) -> BaseCallbackHandler | None:
     """Return a fresh LangChain CallbackHandler bound to the process
     Langfuse client, or None when tracing is disabled.
 
@@ -603,10 +604,16 @@ def langfuse_callback_handler() -> BaseCallbackHandler | None:
     """
     if _langfuse_client is None:
         return None
-    # The handler reads trace context from langgraph's run_id + carries
-    # contextvars (task_id, agent) we already bound in api/inbox.py +
-    # graphs/fleet.py — those land on the Langfuse trace as metadata.
-    return LangfuseLangchainCallback()
+    ctx = structlog.contextvars.get_contextvars()
+    task_id = ctx.get("task_id")
+    # Pin the LangChain trace to the task_id so all LLM calls within one
+    # task share a single Langfuse trace rather than scattering as anonymous
+    # orphan traces. Trace name comes from the LangChain run name (model
+    # class / chain name) — that's the limit of the v3 LangChain integration.
+    trace_context: TraceContext | None = (
+        TraceContext(trace_id=str(task_id)) if task_id else None
+    )
+    return LangfuseLangchainCallback(trace_context=trace_context)
 
 
 def flush_langfuse() -> None:
