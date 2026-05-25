@@ -14,31 +14,23 @@ dependencies = [
     "langchain-core>=0.3.0",
     "langchain-ollama>=0.2.0",
     "langchain-anthropic>=0.3.0",
-
     # HTTP surface
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-
     # State + validation
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",
-
     # Vault content + frontmatter
     "python-frontmatter>=1.1.0",
-
     # Postgres driver (for checkpointer + pgvector)
     "psycopg[binary,pool]>=3.2.0",
     "pgvector>=0.3.0",
-
     # HTTP client for MCP gateway calls
     "httpx>=0.28.0",
-
     # Filesystem watch (skill auto-reload on vault changes)
     "watchdog>=6.0.0",
-
     # Structured logging
     "structlog>=24.4.0",
-
     # Observability — langfuse.langchain.CallbackHandler needs the
     # `langchain` meta-package (not just langchain-core) at import time;
     # see `langfuse/langchain/CallbackHandler.py` which guards with
@@ -46,18 +38,15 @@ dependencies = [
     "langfuse>=2.55.0",
     "langchain>=1.3.0",
     "prometheus-client>=0.21.0",
-
     # Dragonfly-backed dedup store for /inbox idempotency_key
     # enforcement (Phase 3.G). redis-py async-compatible client speaks
     # the Redis protocol; Dragonfly emulates it at sub-ms latency.
     "redis>=5.0.0",
-
     # ULID generation for the CNPG-backed task queue (Phase 4.M1).
     # Lexicographically sortable monotonic IDs; preferred over uuid4
     # because they sort by creation time without a separate timestamp
     # column. python-ulid is pure-Python and stdlib-compatible.
     "python-ulid>=2.0.0",
-
     # OpenTelemetry — Phase 3.K trace propagation. SDK + OTLP gRPC
     # exporter pointed at the in-cluster collector deployed in 2.J2.
     # FastAPI instrumentation auto-spans /inbox requests; httpx
@@ -67,6 +56,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.27.0",
     "opentelemetry-instrumentation-fastapi>=0.48b0",
     "opentelemetry-instrumentation-httpx>=0.48b0",
+    "langchain-mcp-adapters>=0.2.2",
 ]
 
 [dependency-groups]

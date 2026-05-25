@@ -1,9 +1,10 @@
 """Tests for the MCP → LangChain tool bridge.
 
-Validates the boundary between `tools/mcp.py` (allowlist) and
-`tools/mcp_langchain.py` (LangChain tool wrappers used by ReAct
-agents). The MCP gateway itself is mocked — these tests are about
-the wrapping logic, not real MCP traffic.
+The previous version of this module wrapped a custom MCPGatewayClient.
+PR-T rewrote it to use `langchain-mcp-adapters` against the live
+Kuadrant MCP gateway (Streamable HTTP transport). These tests
+mock the upstream discovery so we can assert filtering logic
+without hitting the network.
 """
 
 from __future__ import annotations
@@ -11,155 +12,108 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain_core.tools import BaseTool
 
-from agents.tools.mcp import MCPCallError, MCPPermissionError, MCPResult
-from agents.tools.mcp_langchain import build_mcp_tools_for_agent
+from agents.tools import mcp_langchain
 
 
-def test_auditor_has_kubectl_tools() -> None:
-    """auditor's allowlist contains kubectl-mcp read-only methods.
-    The wrapper should produce one tool per capability."""
-    tools = build_mcp_tools_for_agent("auditor")
+@pytest.fixture(autouse=True)
+def reset_tool_cache():
+    """Each test gets a clean module-level cache."""
+    mcp_langchain._TOOL_CACHE = None
+    yield
+    mcp_langchain._TOOL_CACHE = None
+
+
+def _fake_tool(name: str) -> MagicMock:
+    """Minimal stand-in for a `langchain_core.tools.BaseTool`."""
+    t = MagicMock()
+    t.name = name
+    return t
+
+
+def test_auditor_gets_curated_subset() -> None:
+    """auditor's curated set in `_AGENT_TOOL_NAMES` filters the gateway catalog."""
+    fake_catalog = [
+        _fake_tool("kubectl_get_pods"),
+        _fake_tool("kubectl_get_deployments"),
+        _fake_tool("kubectl_describe"),
+        _fake_tool("kubectl_get_events"),
+        _fake_tool("kubectl_get_logs"),
+        _fake_tool("kubectl_get_namespaces"),
+        _fake_tool("kubectl_get_things_we_dont_want"),  # NOT in auditor's set
+        _fake_tool("ha_ha_call_service"),  # write tool; NOT in auditor's set
+    ]
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        return_value=fake_catalog,
+    ):
+        tools = mcp_langchain.build_mcp_tools_for_agent("auditor")
     names = sorted(t.name for t in tools)
-    # auditor's allowlist per tools/mcp.py is _READ_ONLY_KUBECTL.
-    expected = {
-        "kubectl_mcp__get",
-        "kubectl_mcp__describe",
-        "kubectl_mcp__logs",
-        "kubectl_mcp__events",
-        "kubectl_mcp__top",
-    }
-    assert expected.issubset(set(names))
+    assert names == [
+        "kubectl_describe",
+        "kubectl_get_deployments",
+        "kubectl_get_events",
+        "kubectl_get_logs",
+        "kubectl_get_namespaces",
+        "kubectl_get_pods",
+    ]
 
 
-def test_triager_has_no_tools() -> None:
-    """triager has no MCP allowlist (vault-only by design)."""
-    tools = build_mcp_tools_for_agent("triager")
+def test_agent_without_curated_set_gets_empty_list() -> None:
+    """Agents not in `_AGENT_TOOL_NAMES` get no tools (intentional v1 scope)."""
+    # No catalog discovery should happen — early return.
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+    ) as m_discover:
+        tools = mcp_langchain.build_mcp_tools_for_agent("triager")
     assert list(tools) == []
+    m_discover.assert_not_called()
 
 
-def test_tool_invocation_calls_mcp_gateway() -> None:
-    """When the LLM calls the tool, it should go through MCPGatewayClient."""
-    tools = build_mcp_tools_for_agent("auditor")
-    kubectl_get = next(t for t in tools if t.name == "kubectl_mcp__get")
-
-    fake_result = MCPResult(
-        server="kubectl-mcp",
-        method="get",
-        status_code=200,
-        data={"items": [{"name": "pod-a"}]},
-    )
-
-    with patch("agents.tools.mcp_langchain.MCPGatewayClient") as MockClient:
-        instance = MagicMock()
-        instance.__enter__ = MagicMock(return_value=instance)
-        instance.__exit__ = MagicMock(return_value=None)
-        instance.call.return_value = fake_result
-        MockClient.return_value = instance
-
-        result = kubectl_get.invoke({"arguments": {"resource": "pods", "namespace": "ai"}})
-
-    # Tool returns a stringified observation for the LLM.
-    assert "pod-a" in result
-    # MCPGatewayClient was constructed with the agent_id at module load
-    # time + called with the (server, method, arguments) from the wrapper.
-    instance.call.assert_called_once_with(
-        "kubectl-mcp", "get",
-        arguments={"resource": "pods", "namespace": "ai"},
-    )
+def test_missing_tools_in_catalog_silently_skipped() -> None:
+    """If a curated name isn't in the gateway catalog (e.g. MCP server offline),
+    we skip it rather than crash. Agent operates with what's available."""
+    # Only one of auditor's wanted tools is in the fake catalog.
+    fake_catalog = [_fake_tool("kubectl_get_pods")]
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        return_value=fake_catalog,
+    ):
+        tools = mcp_langchain.build_mcp_tools_for_agent("auditor")
+    assert [t.name for t in tools] == ["kubectl_get_pods"]
 
 
-def test_tool_returns_permission_error_string_not_raise() -> None:
-    """The ReAct loop is broken by Python exceptions. The wrapper must
-    return a STRING the LLM can observe + reason about, not raise."""
-    tools = build_mcp_tools_for_agent("auditor")
-    kubectl_get = next(t for t in tools if t.name == "kubectl_mcp__get")
-
-    with patch("agents.tools.mcp_langchain.MCPGatewayClient") as MockClient:
-        instance = MagicMock()
-        instance.__enter__ = MagicMock(return_value=instance)
-        instance.__exit__ = MagicMock(return_value=None)
-        instance.call.side_effect = MCPPermissionError(
-            "agent 'auditor' is not allowed to call kubectl-mcp.foo"
-        )
-        MockClient.return_value = instance
-
-        result = kubectl_get.invoke({"arguments": {}})
-
-    assert result.startswith("PERMISSION_DENIED")
-    assert "not allowed" in result
+def test_discovery_failure_returns_empty_not_raise() -> None:
+    """Gateway unreachable → empty tool list, NOT exception. The agent's
+    ReAct loop should still construct cleanly; it just has nothing to call."""
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        side_effect=RuntimeError("gateway timed out"),
+    ):
+        tools = mcp_langchain.build_mcp_tools_for_agent("auditor")
+    assert list(tools) == []
+    # And the failure-poisoned cache: subsequent calls don't retry.
+    # (Retry semantics intentional: discovery failure usually means
+    # something's wrong cluster-wide; spamming retries from every agent
+    # invocation makes it worse.)
+    assert mcp_langchain._TOOL_CACHE == []
 
 
-def test_tool_returns_call_error_string() -> None:
-    """5xx / transport errors return a structured string the LLM can act on."""
-    tools = build_mcp_tools_for_agent("auditor")
-    kubectl_get = next(t for t in tools if t.name == "kubectl_mcp__get")
-
-    with patch("agents.tools.mcp_langchain.MCPGatewayClient") as MockClient:
-        instance = MagicMock()
-        instance.__enter__ = MagicMock(return_value=instance)
-        instance.__exit__ = MagicMock(return_value=None)
-        instance.call.side_effect = MCPCallError("kubectl-mcp.get returned 503")
-        MockClient.return_value = instance
-
-        result = kubectl_get.invoke({"arguments": {}})
-
-    assert result.startswith("MCP_CALL_ERROR")
-    assert "503" in result
+def test_cache_hydrated_once() -> None:
+    """Repeated calls hit the cache, not the discovery path."""
+    fake_catalog = [_fake_tool("kubectl_get_pods")]
+    with patch(
+        "agents.tools.mcp_langchain._discover_tools_async",
+        return_value=fake_catalog,
+    ) as m_discover:
+        mcp_langchain.build_mcp_tools_for_agent("auditor")
+        mcp_langchain.build_mcp_tools_for_agent("auditor")
+        mcp_langchain.build_mcp_tools_for_agent("auditor")
+    m_discover.assert_called_once()
 
 
-def test_long_response_truncated_for_context_budget() -> None:
-    """Tool responses get truncated to fit the LLM's context budget."""
-    tools = build_mcp_tools_for_agent("auditor")
-    kubectl_get = next(t for t in tools if t.name == "kubectl_mcp__get")
-
-    huge = {"data": "x" * 20000}
-    fake_result = MCPResult(
-        server="kubectl-mcp", method="get", status_code=200, data=huge,
-    )
-
-    with patch("agents.tools.mcp_langchain.MCPGatewayClient") as MockClient:
-        instance = MagicMock()
-        instance.__enter__ = MagicMock(return_value=instance)
-        instance.__exit__ = MagicMock(return_value=None)
-        instance.call.return_value = fake_result
-        MockClient.return_value = instance
-
-        result = kubectl_get.invoke({"arguments": {}})
-
-    assert "[truncated;" in result
-    # 8K cap + truncation note.
-    assert len(result) < 9000
-
-
-def test_each_tool_is_basetool_instance() -> None:
-    """LangChain's create_react_agent expects BaseTool instances."""
-    tools = build_mcp_tools_for_agent("homelab-engineer")
-    assert tools
-    for t in tools:
-        assert isinstance(t, BaseTool)
-        # Each must have a name + description (the LLM uses both).
-        assert t.name
-        assert t.description
-
-
-@pytest.mark.parametrize(
-    "agent_id,expected_min_count",
-    [
-        ("auditor", 5),         # kubectl read-only verbs
-        ("homelab-engineer", 5),  # kubectl + prom + grafana + omada + netbox
-        ("storage-operator", 3),  # kubectl + prom + grafana
-        ("ml-operator", 3),
-        ("network-operator", 3),
-        ("observability-operator", 4),
-        ("smart-home-operator", 5),
-    ],
-)
-def test_agents_with_tools_get_tools(agent_id: str, expected_min_count: int) -> None:
-    """Sanity check the wrap layer for every agent we expect to use it."""
-    tools = build_mcp_tools_for_agent(agent_id)  # type: ignore[arg-type]
-    assert len(tools) >= expected_min_count, (
-        f"agent {agent_id} produced only {len(tools)} tools; "
-        f"expected >= {expected_min_count}"
-    )
+def test_gateway_url_construction() -> None:
+    """The lib needs `/mcp` appended to the base gateway URL."""
+    url = mcp_langchain._build_gateway_url()
+    assert url.endswith("/mcp")
+    assert "://" in url  # actually a URL, not a path fragment
