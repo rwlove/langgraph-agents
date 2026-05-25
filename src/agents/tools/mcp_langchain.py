@@ -1,201 +1,157 @@
-"""Convert MCP allowlist entries into LangChain tool objects.
+"""LangChain-tool view of the MCP gateway, via `langchain-mcp-adapters`.
 
-Bridges the gap between:
+## What this replaces
 
-- `agents.tools.mcp.MCPGatewayClient` — a thin HTTP client that calls
-  the cluster's mcp-gateway over `POST /servers/<server>/tools/<method>`.
-- LangChain / LangGraph's ReAct pattern — requires `BaseTool` objects
-  the LLM can call iteratively (think → tool_call → observe → reason).
+The previous version of this module wrapped `MCPGatewayClient.call()`
+in custom `StructuredTool` objects. That client used a stale REST URL
+pattern (`POST /servers/<server>/tools/<method>`) which the current
+Kuadrant MCP gateway doesn't speak — every tool call returned
+`400 invalid mcp request` against the live gateway. See memory
+`[[reference_mcp_gateway_client_broken_2026_05_25]]`.
 
-For a given agent_id, this module looks up that agent's
-`ALLOWLISTS` entry in `tools/mcp.py`, wraps each allowed
-`(server, method)` pair as a `StructuredTool`, and returns the list
-ready to be passed to `langgraph.prebuilt.create_react_agent`.
+The current gateway speaks **MCP Streamable HTTP transport** at
+`/mcp` (JSON-RPC + Mcp-Session-Id header + SSE responses). Rather
+than implement that protocol by hand, we use the official
+`langchain-mcp-adapters` library's `MultiServerMCPClient`, which
+already handles session lifecycle + JSON-RPC framing + SSE parsing.
 
-## Why this is the Path 1 unlock
+## Async / sync bridge
 
-Memory `[[reference_agent_fleet_tool_binding_gap]]` (2026-05-23)
-named the gap: every agent except errand-runner uses
-`with_structured_output()` over `state.content` — they reason about
-a prompt but execute zero tool calls. Operator weekly drift crons
-produce LLM reasoning, not data-grounded analysis.
+The lib is async-native: `await client.get_tools()` is the only way
+to discover tools. We bridge to the existing sync `auditor_node` via
+`asyncio.run()` at module load time — discovery happens once per
+process, results are cached. Tool invocation inside the ReAct loop
+also goes through the lib's async path; each LangChain tool's
+sync `invoke()` runs `asyncio.run()` under the hood (the lib
+provides both interfaces).
 
-Path 1 of the workaround was "wire ReAct-style tool-binding";
-Path 2 (workflow pre-fetches Prom data) shipped first in PR-O.
-This module is Path 1 — agents can now call their allowed MCP
-methods inside the LLM loop. Started with the `auditor` agent
-because its blast radius is the smallest (read-only kubectl;
-no MCP writes; no Class C+ actions).
+## Per-agent tool selection
 
-## Schema strategy
+The legacy `ALLOWLISTS` in `mcp.py` was structured around a
+hypothetical MCP server model that doesn't match what the actual
+gateway exposes. The live gateway has ~997 tools across families
+(kubectl_*, prom_*, grafana_*, ha_ha_*, omada_*, netbox_*, etc.).
+Dropping all 997 on an agent's context budget would blow it out
+immediately.
 
-For v1, every MCP method is wrapped with a generic
-`arguments: dict[str, Any]` signature. The LLM gets a clear
-docstring per tool (`"kubectl-mcp/get: kubectl get <resource>
-[options]. Pass arguments like {'resource': 'pods', 'namespace':
-'ai'}"`) and infers the right shape from training-data familiarity
-with kubectl.
+For v1, each agent gets a **hand-curated subset** of the catalog
+matching its job. The maps live below as `_AGENT_TOOL_NAMES`.
+Adding tools to an agent is a single-source-of-truth code change
+here; the ALLOWLISTS in `mcp.py` stays as the boundary doc for
+errand-runner (which still uses the imperative API).
 
-A future improvement: introspect the MCP server's `tools/list`
-response to generate per-method Pydantic schemas. Skipped for v1
-because the LLM does well enough with the generic-dict approach
-and per-method schemas double the surface area to maintain.
+## Scope for PR-T
+
+Wire auditor first; other agents land in follow-up PRs as their
+tool sets get curated.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
+import logging
 from collections.abc import Sequence
-from typing import Any
 
-from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import BaseModel, Field
+from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from agents.settings import get_settings
 from agents.state import AgentId
-from agents.tools.mcp import (
-    ALLOWLISTS,
-    MCPCallError,
-    MCPGatewayClient,
-    MCPPermissionError,
-)
+
+logger = logging.getLogger(__name__)
 
 
-class _GenericMcpArgs(BaseModel):
-    """Generic arguments wrapper for MCP tool calls.
-
-    The LLM passes whatever shape the underlying MCP method expects
-    (e.g. ``{"resource": "pods", "namespace": "ai"}`` for
-    ``kubectl-mcp/get``). The wrapper passes it through to
-    ``MCPGatewayClient.call()`` as-is; the MCP server validates
-    its own shape.
-    """
-
-    arguments: dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Arguments to pass to the MCP method. Shape varies per "
-            "method — see the tool's docstring for examples."
-        ),
-    )
-
-
-# Per-MCP-method docstring hints. Each line is the format the LLM
-# should see for that tool's `description` field — it should be just
-# detailed enough to let the LLM pick the right arguments without
-# trial-and-error. If a method isn't listed, falls back to a generic
-# "Call <server>.<method>" string.
+# Per-agent curated tool subsets. The names match what the live gateway
+# returns from `MultiServerMCPClient.get_tools()`. Verified 2026-05-25
+# against the cluster's mcp-gateway-istio service.
 #
-# Doc-strings stay short — qwen2.5:32b's context budget is finite and
-# every tool description gets injected into the system prompt.
-_METHOD_HINTS: dict[tuple[str, str], str] = {
-    # kubectl-mcp — read-only verbs.
-    ("kubectl-mcp", "get"): (
-        "kubectl get a resource. "
-        "Args: {'resource': 'pods'|'deployments'|'pvc'|..., "
-        "'namespace'?: str, 'name'?: str, 'output'?: 'json'|'yaml'}."
-    ),
-    ("kubectl-mcp", "describe"): (
-        "kubectl describe a resource. "
-        "Args: {'resource': str, 'name': str, 'namespace'?: str}."
-    ),
-    ("kubectl-mcp", "logs"): (
-        "kubectl logs from a pod. "
-        "Args: {'pod': str, 'namespace': str, 'container'?: str, "
-        "'tail'?: int}."
-    ),
-    ("kubectl-mcp", "events"): (
-        "kubectl get events in a namespace. "
-        "Args: {'namespace'?: str}."
-    ),
-    ("kubectl-mcp", "top"): (
-        "kubectl top pods or nodes. "
-        "Args: {'resource': 'pods'|'nodes', 'namespace'?: str}."
-    ),
-    # prometheus-mcp.
-    ("prometheus-mcp", "query"): (
-        "PromQL instant query. "
-        "Args: {'query': str}."
-    ),
-    ("prometheus-mcp", "query_range"): (
-        "PromQL range query. "
-        "Args: {'query': str, 'start': int, 'end': int, 'step': str}."
-    ),
-    ("prometheus-mcp", "alerts"): (
-        "List currently-firing Prometheus alerts. Args: {}."
-    ),
-    # grafana-mcp.
-    ("grafana-mcp", "list_dashboards"): (
-        "List Grafana dashboards. Args: {}."
-    ),
-    ("grafana-mcp", "dashboard_by_uid"): (
-        "Get a Grafana dashboard JSON by uid. Args: {'uid': str}."
-    ),
+# Auditor gets read-only kubectl + targeted prometheus. Adding tools is
+# a 1-line edit + redeploy. Removing one is a 1-line edit (no behavioral
+# coupling to anything else).
+_AGENT_TOOL_NAMES: dict[AgentId, frozenset[str]] = {
+    "auditor": frozenset({
+        # Image enumeration is the auditor's bread-and-butter v1 use case.
+        # `kubectl_get_pods` + `kubectl_get_deployments` cover most surface;
+        # logs + events let it look at recent context if a finding warrants it.
+        "kubectl_get_pods",
+        "kubectl_get_deployments",
+        "kubectl_get_namespaces",
+        "kubectl_describe",
+        "kubectl_get_events",
+        "kubectl_get_logs",
+    }),
+    # Other agents land in follow-up PRs as their toolsets get curated.
 }
 
 
-def _build_one_tool(
-    agent_id: AgentId,
-    server: str,
-    method: str,
-) -> BaseTool:
-    """Wrap a single MCP (server, method) pair as a LangChain BaseTool."""
-    name = f"{server}__{method}".replace("-", "_")
-    description = _METHOD_HINTS.get(
-        (server, method),
-        f"Call {server}.{method} on the MCP gateway.",
-    )
+# Module-level tool cache. `MultiServerMCPClient.get_tools()` is async;
+# we hydrate this once at first call via `asyncio.run` and reuse. The
+# lib's tools are designed to be reused across invocations (they hold a
+# reference to the gateway client, not per-call state).
+_TOOL_CACHE: list[BaseTool] | None = None
 
-    def _call(arguments: dict[str, Any] | None = None) -> str:
-        """Synchronous MCP call wrapper.
 
-        Returns a string (the LLM's `observation` slot) summarizing
-        the MCP response. On error returns a structured error string
-        the LLM can reason about — does NOT raise, because that would
-        break the ReAct loop. The LLM seeing "PERMISSION_DENIED" or
-        "TIMEOUT" is more useful than a Python exception bubbling up.
-        """
-        try:
-            with MCPGatewayClient(agent_id) as client:
-                result = client.call(server, method, arguments=arguments or {})
-        except MCPPermissionError as exc:
-            return f"PERMISSION_DENIED: {exc}"
-        except MCPCallError as exc:
-            return f"MCP_CALL_ERROR: {exc}"
-        except Exception as exc:
-            return f"UNEXPECTED_ERROR: {type(exc).__name__}: {exc}"
+def _build_gateway_url() -> str:
+    """Construct the Streamable HTTP MCP endpoint URL for the cluster's gateway.
 
-        # MCPResult.data is whatever the MCP server returned (dict, list,
-        # or string). Stringify it consistently so the LLM gets a
-        # predictable observation shape. JSON for structured data; cap at
-        # ~8K chars to leave room in context.
-        data = result.data
-        if isinstance(data, (dict, list)):
-            text = json.dumps(data, indent=2, default=str)
-        else:
-            text = str(data)
+    `settings.mcp_gateway_url` is the base URL the legacy
+    `MCPGatewayClient` used (e.g. `http://mcp-gateway-istio...:8080`).
+    The Kuadrant gateway exposes the MCP protocol at `/mcp` on that
+    same host; we append the path here so the rest of the codebase
+    doesn't need to know about it.
+    """
+    base = get_settings().mcp_gateway_url.rstrip("/")
+    return f"{base}/mcp"
 
-        if len(text) > 8000:
-            text = text[:8000] + f"\n\n... [truncated; {len(text)} chars total]"
-        return text
 
-    return StructuredTool.from_function(
-        func=_call,
-        name=name,
-        description=description,
-        args_schema=_GenericMcpArgs,
-    )
+async def _discover_tools_async() -> list[BaseTool]:
+    """Call the gateway's MCP `tools/list` once and return the full catalog."""
+    client = MultiServerMCPClient({
+        "gateway": {
+            "url": _build_gateway_url(),
+            "transport": "streamable_http",
+        },
+    })
+    return await client.get_tools()
+
+
+def _ensure_tools_loaded() -> list[BaseTool]:
+    """Hydrate the module-level tool cache on first call.
+
+    Uses `asyncio.run` to bridge the lib's async API into the sync agent
+    nodes. Subsequent calls return the cached list. If discovery raises
+    (gateway unreachable, no MCP servers registered, etc.), we log and
+    return an empty list so the agent's ReAct loop still constructs
+    cleanly — it just has no tools to call, same observable behavior
+    as the legacy "MCP allowlist is empty" path.
+    """
+    global _TOOL_CACHE  # noqa: PLW0603 — intentional module-level cache (one-shot, process-lifetime)
+    if _TOOL_CACHE is not None:
+        return _TOOL_CACHE
+    try:
+        _TOOL_CACHE = asyncio.run(_discover_tools_async())
+        logger.info("mcp_tools_discovered count=%d", len(_TOOL_CACHE))
+    except Exception:
+        logger.exception("mcp_tools_discovery_failed")
+        _TOOL_CACHE = []
+    return _TOOL_CACHE
 
 
 def build_mcp_tools_for_agent(agent_id: AgentId) -> Sequence[BaseTool]:
-    """Return LangChain tools for every MCP capability `agent_id` is allowed to call.
+    """Return the curated tool subset for `agent_id`.
 
-    Empty list when the agent has no MCP allowlist (e.g. `triager`,
-    `historian`, `reviewer` are vault-only by design).
+    Agents NOT in `_AGENT_TOOL_NAMES` get an empty list — same behavior
+    as the legacy `frozenset()` allowlist entries. Adding an agent's
+    tools is a code change to `_AGENT_TOOL_NAMES` above.
 
-    The returned tools can be passed directly to
-    ``langgraph.prebuilt.create_react_agent(model, tools=...)``.
+    Tools are filtered by exact name match against the gateway's
+    advertised catalog. If a name in `_AGENT_TOOL_NAMES` doesn't match
+    any discovered tool, it's silently skipped — useful when an MCP
+    server is temporarily offline (tools missing from the catalog;
+    the agent operates with what's available).
     """
-    capabilities = ALLOWLISTS.get(agent_id, frozenset())
-    return [
-        _build_one_tool(agent_id, cap.server, cap.method) for cap in capabilities
-    ]
+    wanted = _AGENT_TOOL_NAMES.get(agent_id, frozenset())
+    if not wanted:
+        return []
+    catalog = _ensure_tools_loaded()
+    return [t for t in catalog if t.name in wanted]
