@@ -134,6 +134,19 @@ class SmartHomeFinding(BaseModel):
         default_factory=list,
         description=("Vault paths, memory entries, ha_*-tool outputs cited, ha-config repo paths."),
     )
+    analysis: str = Field(
+        default="",
+        description=(
+            "Free-form analysis the structured fields above don't capture. "
+            "Use this for sweep-mode (weekly drift) where you're analyzing "
+            "evidence without proposing a Class-C action: list each notable "
+            "datum from the evidence block + a one-sentence 'why it matters', "
+            "ranked by risk. The eight-clause gate still applies to "
+            "proposed_change / blast_radius / rollback when this is an "
+            "action proposal; for sweep mode they can be empty and this "
+            "field carries the substance."
+        ),
+    )
 
 
 def _build_llm() -> BaseChatModel:
@@ -171,7 +184,8 @@ def _render_markdown(finding: SmartHomeFinding, task_id: str) -> str:
         f"{warnings}"
         "## Summary\n\n"
         f"{finding.summary}\n\n"
-        "## Failure domain\n\n"
+        + (f"## Analysis\n\n{finding.analysis}\n\n" if finding.analysis else "")
+        + "## Failure domain\n\n"
         f"{finding.failure_domain}\n\n"
         "## Entities\n\n"
         f"{entities}\n\n"
@@ -256,7 +270,15 @@ def smart_home_operator_node(state: FleetState) -> dict[str, Any]:
                 "disable, set recovery_path_touched=true. If the change "
                 "could fire 00:00-06:00, set sleep_hours_warning=true. "
                 "Verbatim rollback. Enumerated blast radius. HA writes "
-                "hand off to errand-runner."
+                "hand off to errand-runner.\n\n"
+                "SWEEP MODE: when the REQUEST is a weekly drift sweep "
+                "(no specific YAML change being proposed) and includes "
+                "pre-fetched evidence, set action_class=A and put your "
+                "substance in the `analysis` field — ranked findings "
+                "from the evidence + one-sentence 'why it matters' + "
+                "single recommended next step per finding. Leave "
+                "proposed_change/blast_radius/rollback empty in sweep "
+                "mode; those are for action proposals only."
             )
         ),
     ]
