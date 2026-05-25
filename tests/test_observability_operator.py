@@ -152,9 +152,8 @@ async def test_observability_operator_writes_finding_to_vault(temp_vault: Path) 
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    _ev = AsyncMock(return_value="")
     with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()), \
-         patch("agents.nodes.observability_operator.gather_evidence", new=_ev):
+         patch("agents.nodes.observability_operator.gather_evidence", new=AsyncMock(return_value="")):
         result = await observability_operator_node(state)
 
     expected_path = temp_vault / "inbox" / "drafts" / "observability-t-obs-001.md"
@@ -190,9 +189,8 @@ async def test_observability_operator_surfaces_recovery_path_touched(temp_vault:
         def invoke(self, _messages):
             return _fake_recovery_path_finding()
 
-    _ev = AsyncMock(return_value="")
     with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()), \
-         patch("agents.nodes.observability_operator.gather_evidence", new=_ev):
+         patch("agents.nodes.observability_operator.gather_evidence", new=AsyncMock(return_value="")):
         result = await observability_operator_node(state)
 
     body = (temp_vault / "inbox" / "drafts" / "observability-t-obs-002.md").read_text()
@@ -312,9 +310,8 @@ async def test_observability_operator_composes_approval_request_for_action(
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    _ev = AsyncMock(return_value="")
     with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()), \
-         patch("agents.nodes.observability_operator.gather_evidence", new=_ev):
+         patch("agents.nodes.observability_operator.gather_evidence", new=AsyncMock(return_value="")):
         update = await observability_operator_node(state)
 
     assert update["target_agent"] == "errand-runner"
@@ -345,9 +342,8 @@ async def test_observability_operator_skips_approval_for_question(temp_vault: Pa
         def invoke(self, _messages):
             return _fake_recovery_path_finding()
 
-    _ev = AsyncMock(return_value="")
     with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()), \
-         patch("agents.nodes.observability_operator.gather_evidence", new=_ev):
+         patch("agents.nodes.observability_operator.gather_evidence", new=AsyncMock(return_value="")):
         update = await observability_operator_node(state)
 
     assert "approval_request" not in update
