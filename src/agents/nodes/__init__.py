@@ -42,12 +42,12 @@ from .supervisor import supervisor_node
 from .triager import triager_node
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Coroutine
     from typing import Any
 
     from agents.state import AgentId, FleetState
 
-    NodeBuilder = Callable[[FleetState], dict[str, Any]]
+    NodeBuilder = Callable[[FleetState], dict[str, Any] | Coroutine[Any, Any, dict[str, Any]]]
 
 
 NODES: dict[AgentId, NodeBuilder] = {

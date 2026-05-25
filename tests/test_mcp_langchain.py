@@ -9,7 +9,7 @@ without hitting the network.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -31,7 +31,8 @@ def _fake_tool(name: str) -> MagicMock:
     return t
 
 
-def test_auditor_gets_curated_subset() -> None:
+@pytest.mark.asyncio
+async def test_auditor_gets_curated_subset() -> None:
     """auditor's curated set in `_AGENT_TOOL_NAMES` filters the gateway catalog."""
     fake_catalog = [
         _fake_tool("kubectl_get_pods"),
@@ -45,9 +46,9 @@ def test_auditor_gets_curated_subset() -> None:
     ]
     with patch(
         "agents.tools.mcp_langchain._discover_tools_async",
-        return_value=fake_catalog,
+        new=AsyncMock(return_value=fake_catalog),
     ):
-        tools = mcp_langchain.build_mcp_tools_for_agent("auditor")
+        tools = await mcp_langchain.build_mcp_tools_for_agent("auditor")
     names = sorted(t.name for t in tools)
     assert names == [
         "kubectl_describe",
@@ -59,38 +60,42 @@ def test_auditor_gets_curated_subset() -> None:
     ]
 
 
-def test_agent_without_curated_set_gets_empty_list() -> None:
+@pytest.mark.asyncio
+async def test_agent_without_curated_set_gets_empty_list() -> None:
     """Agents not in `_AGENT_TOOL_NAMES` get no tools (intentional v1 scope)."""
     # No catalog discovery should happen — early return.
     with patch(
         "agents.tools.mcp_langchain._discover_tools_async",
+        new=AsyncMock(),
     ) as m_discover:
-        tools = mcp_langchain.build_mcp_tools_for_agent("triager")
+        tools = await mcp_langchain.build_mcp_tools_for_agent("triager")
     assert list(tools) == []
     m_discover.assert_not_called()
 
 
-def test_missing_tools_in_catalog_silently_skipped() -> None:
+@pytest.mark.asyncio
+async def test_missing_tools_in_catalog_silently_skipped() -> None:
     """If a curated name isn't in the gateway catalog (e.g. MCP server offline),
     we skip it rather than crash. Agent operates with what's available."""
     # Only one of auditor's wanted tools is in the fake catalog.
     fake_catalog = [_fake_tool("kubectl_get_pods")]
     with patch(
         "agents.tools.mcp_langchain._discover_tools_async",
-        return_value=fake_catalog,
+        new=AsyncMock(return_value=fake_catalog),
     ):
-        tools = mcp_langchain.build_mcp_tools_for_agent("auditor")
+        tools = await mcp_langchain.build_mcp_tools_for_agent("auditor")
     assert [t.name for t in tools] == ["kubectl_get_pods"]
 
 
-def test_discovery_failure_returns_empty_not_raise() -> None:
+@pytest.mark.asyncio
+async def test_discovery_failure_returns_empty_not_raise() -> None:
     """Gateway unreachable → empty tool list, NOT exception. The agent's
     ReAct loop should still construct cleanly; it just has nothing to call."""
     with patch(
         "agents.tools.mcp_langchain._discover_tools_async",
-        side_effect=RuntimeError("gateway timed out"),
+        new=AsyncMock(side_effect=RuntimeError("gateway timed out")),
     ):
-        tools = mcp_langchain.build_mcp_tools_for_agent("auditor")
+        tools = await mcp_langchain.build_mcp_tools_for_agent("auditor")
     assert list(tools) == []
     # And the failure-poisoned cache: subsequent calls don't retry.
     # (Retry semantics intentional: discovery failure usually means
@@ -99,16 +104,17 @@ def test_discovery_failure_returns_empty_not_raise() -> None:
     assert mcp_langchain._TOOL_CACHE == []
 
 
-def test_cache_hydrated_once() -> None:
+@pytest.mark.asyncio
+async def test_cache_hydrated_once() -> None:
     """Repeated calls hit the cache, not the discovery path."""
     fake_catalog = [_fake_tool("kubectl_get_pods")]
     with patch(
         "agents.tools.mcp_langchain._discover_tools_async",
-        return_value=fake_catalog,
+        new=AsyncMock(return_value=fake_catalog),
     ) as m_discover:
-        mcp_langchain.build_mcp_tools_for_agent("auditor")
-        mcp_langchain.build_mcp_tools_for_agent("auditor")
-        mcp_langchain.build_mcp_tools_for_agent("auditor")
+        await mcp_langchain.build_mcp_tools_for_agent("auditor")
+        await mcp_langchain.build_mcp_tools_for_agent("auditor")
+        await mcp_langchain.build_mcp_tools_for_agent("auditor")
     m_discover.assert_called_once()
 
 

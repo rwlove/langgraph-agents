@@ -60,6 +60,10 @@ from agents.state import AgentId
 
 logger = logging.getLogger(__name__)
 
+# Async lock prevents concurrent discovery races when multiple tasks
+# start simultaneously before the cache is warm.
+_TOOL_CACHE_LOCK = asyncio.Lock()
+
 
 # Per-agent curated tool subsets. The names match what the live gateway
 # returns from `MultiServerMCPClient.get_tools()`. Verified 2026-05-25
@@ -84,10 +88,8 @@ _AGENT_TOOL_NAMES: dict[AgentId, frozenset[str]] = {
 }
 
 
-# Module-level tool cache. `MultiServerMCPClient.get_tools()` is async;
-# we hydrate this once at first call via `asyncio.run` and reuse. The
-# lib's tools are designed to be reused across invocations (they hold a
-# reference to the gateway client, not per-call state).
+# Module-level tool cache. Populated on first call to
+# `build_mcp_tools_for_agent`; reused for the process lifetime.
 _TOOL_CACHE: list[BaseTool] | None = None
 
 
@@ -115,29 +117,30 @@ async def _discover_tools_async() -> list[BaseTool]:
     return await client.get_tools()
 
 
-def _ensure_tools_loaded() -> list[BaseTool]:
-    """Hydrate the module-level tool cache on first call.
+async def _ensure_tools_loaded_async() -> list[BaseTool]:
+    """Hydrate the module-level tool cache on first call (async).
 
-    Uses `asyncio.run` to bridge the lib's async API into the sync agent
-    nodes. Subsequent calls return the cached list. If discovery raises
-    (gateway unreachable, no MCP servers registered, etc.), we log and
-    return an empty list so the agent's ReAct loop still constructs
-    cleanly — it just has no tools to call, same observable behavior
-    as the legacy "MCP allowlist is empty" path.
+    Protected by an asyncio.Lock so concurrent callers don't race.
+    If discovery raises (gateway unreachable, no MCP servers registered,
+    etc.), logs and returns an empty list — the ReAct loop constructs
+    cleanly with no tools rather than crashing.
     """
     global _TOOL_CACHE  # noqa: PLW0603 — intentional module-level cache (one-shot, process-lifetime)
     if _TOOL_CACHE is not None:
         return _TOOL_CACHE
-    try:
-        _TOOL_CACHE = asyncio.run(_discover_tools_async())
-        logger.info("mcp_tools_discovered count=%d", len(_TOOL_CACHE))
-    except Exception:
-        logger.exception("mcp_tools_discovery_failed")
-        _TOOL_CACHE = []
+    async with _TOOL_CACHE_LOCK:
+        if _TOOL_CACHE is not None:  # re-check under lock
+            return _TOOL_CACHE
+        try:
+            _TOOL_CACHE = await _discover_tools_async()
+            logger.info("mcp_tools_discovered count=%d", len(_TOOL_CACHE))
+        except Exception:
+            logger.exception("mcp_tools_discovery_failed")
+            _TOOL_CACHE = []
     return _TOOL_CACHE
 
 
-def build_mcp_tools_for_agent(agent_id: AgentId) -> Sequence[BaseTool]:
+async def build_mcp_tools_for_agent(agent_id: AgentId) -> Sequence[BaseTool]:
     """Return the curated tool subset for `agent_id`.
 
     Agents NOT in `_AGENT_TOOL_NAMES` get an empty list — same behavior
@@ -153,5 +156,5 @@ def build_mcp_tools_for_agent(agent_id: AgentId) -> Sequence[BaseTool]:
     wanted = _AGENT_TOOL_NAMES.get(agent_id, frozenset())
     if not wanted:
         return []
-    catalog = _ensure_tools_loaded()
+    catalog = await _ensure_tools_loaded_async()
     return [t for t in catalog if t.name in wanted]

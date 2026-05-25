@@ -53,10 +53,10 @@ _RECURSION_LIMIT = 25
 slog = get_logger("nodes.auditor")
 
 
-def auditor_node(state: FleetState) -> dict[str, Any]:
+async def auditor_node(state: FleetState) -> dict[str, Any]:
     """Produce an audit report by iteratively calling kubectl-mcp tools."""
     persona = load_persona(_AGENT_ID)
-    tools = build_mcp_tools_for_agent(_AGENT_ID)
+    tools = await build_mcp_tools_for_agent(_AGENT_ID)
 
     system_prompt = (
         f"{persona}\n\n"
@@ -90,7 +90,7 @@ def auditor_node(state: FleetState) -> dict[str, Any]:
     }
 
     try:
-        final_state = agent.invoke(inputs, config=config)
+        final_state = await agent.ainvoke(inputs, config=config)
     except GraphRecursionError:
         # Hit the recursion limit before producing a final answer.
         # Capture whatever text was emitted so the operator at least
