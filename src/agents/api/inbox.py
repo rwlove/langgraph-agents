@@ -174,7 +174,11 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
                 idempotency_key=req.idempotency_key,
                 returned_task_id=prior_task_id,
             )
-            return InboxResponse(task_id=prior_task_id, conversation_id=prior_task_id, status="duplicate")
+            return InboxResponse(
+                task_id=prior_task_id,
+                conversation_id=prior_task_id,
+                status="duplicate",
+            )
 
     envelope: dict[str, Any] = req.model_dump(mode="json")
     queue_task_id = await queue.enqueue(envelope)

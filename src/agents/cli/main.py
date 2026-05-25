@@ -83,7 +83,10 @@ def cmd_task_add(args: argparse.Namespace) -> None:
         assert isinstance(resp, dict)
         task_id = resp["task_id"]
         conversation_id = resp.get("conversation_id", task_id)
-        print(f"task_id: {task_id}  conversation_id: {conversation_id}  status: {resp.get('status', 'accepted')}")
+        print(
+            f"task_id: {task_id}  conversation_id: {conversation_id}"
+            f"  status: {resp.get('status', 'accepted')}"
+        )
         if args.no_tail:
             return
         _tail(client, cfg, task_id)
@@ -332,7 +335,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--conversation-id",
         metavar="ID",
         default=None,
-        help="continue an existing conversation thread (pass conversation_id from a prior response)",
+        help="continue an existing conversation thread (pass conversation_id from prior response)",
     )
     p_task_add.set_defaults(func=cmd_task_add)
 
