@@ -23,6 +23,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agents.llm import llm
+from agents.nodes._evidence import gather_evidence
 from agents.personas import load_persona
 from agents.state import ActionClass, AgentId, ApprovalRequest, FleetState
 from agents.tools.obsidian import write_draft
@@ -196,15 +197,21 @@ def _render_markdown(finding: StorageFinding, task_id: str) -> str:
     )
 
 
-def storage_operator_node(state: FleetState) -> dict[str, Any]:
+async def storage_operator_node(state: FleetState) -> dict[str, Any]:
     """Analyze + propose for any storage request.
 
     Prime-directive enforcement is in the persona (SOUL.md / IDENTITY.md);
     the schema makes the gate fields mandatory so a downstream agent can
     machine-verify the safety analysis before acting.
     """
+    evidence = await gather_evidence(_AGENT_ID, state.content)
+    evidence_block = (
+        f"\n\nPRE-FETCHED EVIDENCE (from MCP tools):\n{evidence}"
+        if evidence else ""
+    )
+
     persona = load_persona(_AGENT_ID)
-    llm = _build_llm()
+    model = _build_llm()
 
     triage_hint = ""
     if state.triage:
@@ -218,7 +225,7 @@ def storage_operator_node(state: FleetState) -> dict[str, Any]:
         SystemMessage(content=persona),
         HumanMessage(
             content=(
-                f"REQUEST:\n\n{state.content}{triage_hint}\n\n"
+                f"REQUEST:\n\n{state.content}{evidence_block}{triage_hint}\n\n"
                 "Produce a StorageFinding. Prime directive: you cannot lose "
                 "data. Run the eight-clause execution gate before choosing "
                 "action_class C. If any clause fails, downgrade to A "
@@ -241,7 +248,7 @@ def storage_operator_node(state: FleetState) -> dict[str, Any]:
         ),
     ]
 
-    finding: StorageFinding = llm.invoke(messages)  # type: ignore[assignment]
+    finding: StorageFinding = model.invoke(messages)  # type: ignore[assignment]
     markdown = _render_markdown(finding, state.task_id)
     result = write_draft(state.task_id, markdown, kind="storage")
 

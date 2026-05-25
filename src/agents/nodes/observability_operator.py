@@ -22,6 +22,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agents.llm import llm
+from agents.nodes._evidence import gather_evidence
 from agents.personas import load_persona
 from agents.state import ActionClass, AgentId, ApprovalRequest, FleetState
 from agents.tools.obsidian import write_draft
@@ -229,7 +230,7 @@ def _render_markdown(f: ObservabilityFinding, task_id: str) -> str:
     )
 
 
-def observability_operator_node(state: FleetState) -> dict[str, Any]:
+async def observability_operator_node(state: FleetState) -> dict[str, Any]:
     """Analyze + propose for any observability request.
 
     Prime-directive enforcement is in the persona; the schema makes the
@@ -237,8 +238,14 @@ def observability_operator_node(state: FleetState) -> dict[str, Any]:
     force the LLM to name BOTH failure directions, which is the discipline
     this role exists to enforce.
     """
+    evidence = await gather_evidence(_AGENT_ID, state.content)
+    evidence_block = (
+        f"\n\nPRE-FETCHED EVIDENCE (from MCP tools):\n{evidence}"
+        if evidence else ""
+    )
+
     persona = load_persona(_AGENT_ID)
-    llm = _build_llm()
+    model = _build_llm()
 
     triage_hint = ""
     if state.triage:
@@ -252,7 +259,7 @@ def observability_operator_node(state: FleetState) -> dict[str, Any]:
         SystemMessage(content=persona),
         HumanMessage(
             content=(
-                f"REQUEST:\n\n{state.content}{triage_hint}\n\n"
+                f"REQUEST:\n\n{state.content}{evidence_block}{triage_hint}\n\n"
                 "Produce an ObservabilityFinding. Prime directive: you cannot "
                 "bury a real alert under flap. Name BOTH failure modes — "
                 "flood_mode (noise crowds real signal) AND mute_mode (real "
@@ -275,7 +282,7 @@ def observability_operator_node(state: FleetState) -> dict[str, Any]:
         ),
     ]
 
-    finding: ObservabilityFinding = llm.invoke(messages)  # type: ignore[assignment]
+    finding: ObservabilityFinding = model.invoke(messages)  # type: ignore[assignment]
     markdown = _render_markdown(finding, state.task_id)
     result = write_draft(state.task_id, markdown, kind="observability")
 

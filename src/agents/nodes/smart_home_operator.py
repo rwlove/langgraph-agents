@@ -24,6 +24,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agents.llm import llm
+from agents.nodes._evidence import gather_evidence
 from agents.personas import load_persona
 from agents.settings import get_settings
 from agents.state import ActionClass, AgentId, ApprovalRequest, FleetState
@@ -227,15 +228,21 @@ def _load_intent_map() -> str:
     return text
 
 
-def smart_home_operator_node(state: FleetState) -> dict[str, Any]:
+async def smart_home_operator_node(state: FleetState) -> dict[str, Any]:
     """Analyze + propose for any HA / smart-home request.
 
     Prime-directive enforcement is in the persona; the schema makes the
     gate fields mandatory so a downstream agent can machine-verify the
     safety analysis before acting.
     """
+    evidence = await gather_evidence(_AGENT_ID, state.content)
+    evidence_block = (
+        f"\n\nPRE-FETCHED EVIDENCE (from MCP tools):\n{evidence}"
+        if evidence else ""
+    )
+
     persona = load_persona(_AGENT_ID)
-    llm = _build_llm()
+    model = _build_llm()
 
     triage_hint = ""
     if state.triage:
@@ -260,7 +267,7 @@ def smart_home_operator_node(state: FleetState) -> dict[str, Any]:
         SystemMessage(content=persona),
         HumanMessage(
             content=(
-                f"REQUEST:\n\n{state.content}{triage_hint}{intent_context}\n\n"
+                f"REQUEST:\n\n{state.content}{evidence_block}{triage_hint}{intent_context}\n\n"
                 "Produce a SmartHomeFinding. Prime directive: you cannot "
                 "break Home Assistant. Run the eight-clause execution gate "
                 "before choosing action_class C. Reference HA entity IDs + "
@@ -283,7 +290,7 @@ def smart_home_operator_node(state: FleetState) -> dict[str, Any]:
         ),
     ]
 
-    finding: SmartHomeFinding = llm.invoke(messages)  # type: ignore[assignment]
+    finding: SmartHomeFinding = model.invoke(messages)  # type: ignore[assignment]
     markdown = _render_markdown(finding, state.task_id)
     result = write_draft(state.task_id, markdown, kind="smart-home")
 
