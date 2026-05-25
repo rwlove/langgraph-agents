@@ -218,7 +218,8 @@ class QueueWorker:
             # and skips its own routing — see agents.nodes.triager.
             target_agent=envelope.get("target_agent"),
         )
-        config: Any = {"configurable": {"thread_id": task_id}}
+        thread_id = envelope.get("conversation_id") or task_id
+        config: Any = {"configurable": {"thread_id": thread_id}}
         final = await self._graph.ainvoke(initial_state, config=config)
         output = final.get("output") if isinstance(final, dict) else None
         return output if isinstance(output, str) else None
