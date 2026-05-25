@@ -173,9 +173,10 @@ async def test_observability_operator_writes_finding_to_vault(temp_vault: Path) 
     assert "## Mute mode" in body
     assert "Longhorn" in body
     assert "```\nDelete the PrometheusRule" in body
-    assert "class=C" in result["output"]
-    assert "routing=holmesgpt" in result["output"]
-    assert "for_clause=True" in result["output"]
+    assert "obsidian://" in result["output"]
+    assert "action_class: C" in result["output"]
+    assert "routing_target: holmesgpt" in result["output"]
+    assert "has_for_clause: True" in result["output"]
 
 
 async def test_observability_operator_surfaces_recovery_path_touched(temp_vault: Path) -> None:
@@ -201,7 +202,7 @@ async def test_observability_operator_surfaces_recovery_path_touched(temp_vault:
     assert "handoff_target: user" in body
     assert "action_class: A" in body
     assert "alert_volume_delta: fewer" in body
-    assert "recovery_path=True" in result["output"]
+    assert "recovery_path_touched: True" in result["output"]
 
 
 def test_observability_finding_schema_rejects_invalid_routing() -> None:

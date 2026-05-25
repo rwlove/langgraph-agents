@@ -125,9 +125,10 @@ async def test_network_operator_writes_finding_to_vault(temp_vault: Path) -> Non
     # can paste it back without losing structure.
     assert "```\ndelete acl rule" in body
     # Output line carries the routing-relevant fields for the supervisor.
-    assert "class=C" in result["output"]
-    assert "handoff=errand-runner" in result["output"]
-    assert "recovery_path=False" in result["output"]
+    assert "obsidian://" in result["output"]
+    assert "action_class: C" in result["output"]
+    assert "handoff_target: errand-runner" in result["output"]
+    assert "recovery_path_touched: False" in result["output"]
 
 
 async def test_network_operator_surfaces_recovery_path_touched(temp_vault: Path) -> None:
@@ -153,7 +154,7 @@ async def test_network_operator_surfaces_recovery_path_touched(temp_vault: Path)
     assert "⚠️ Recovery path touched" in body
     assert "handoff_target: user" in body
     assert "action_class: A" in body
-    assert "recovery_path=True" in result["output"]
+    assert "recovery_path_touched: True" in result["output"]
 
 
 def test_network_finding_schema_rejects_invalid_action_class() -> None:

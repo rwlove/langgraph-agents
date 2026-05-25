@@ -252,11 +252,12 @@ async def storage_operator_node(state: FleetState) -> dict[str, Any]:
     markdown = _render_markdown(finding, state.task_id)
     result = write_draft(state.task_id, markdown, kind="storage")
 
+    obsidian_link = result.obsidian_uri()
     update: dict[str, Any] = {
         "output": (
-            f"storage finding: {result.path} "
-            f"(class={finding.action_class}, handoff={finding.handoff_target}, "
-            f"recovery_path={finding.recovery_path_touched})"
+            f"[Open in Obsidian ↗]({obsidian_link})\n\n"
+            "---\n\n"
+            f"{markdown}"
         ),
     }
 

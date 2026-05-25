@@ -130,8 +130,9 @@ async def test_smart_home_operator_writes_finding_to_vault(temp_vault: Path) -> 
     assert "sleep_hours_warning: False" in body
     assert "binary_sensor.porch_motion_v2" in body
     assert "```\n# old automation trigger" in body
-    assert "class=C" in result["output"]
-    assert "handoff=errand-runner" in result["output"]
+    assert "obsidian://" in result["output"]
+    assert "action_class: C" in result["output"]
+    assert "handoff_target: errand-runner" in result["output"]
 
 
 async def test_smart_home_operator_surfaces_safety_device_touched(temp_vault: Path) -> None:
@@ -154,7 +155,7 @@ async def test_smart_home_operator_surfaces_safety_device_touched(temp_vault: Pa
     assert "⚠️ Recovery path touched" in body
     assert "handoff_target: user" in body
     assert "action_class: A" in body
-    assert "recovery_path=True" in result["output"]
+    assert "recovery_path_touched: True" in result["output"]
 
 
 def test_smart_home_finding_schema_rejects_invalid_handoff_target() -> None:
