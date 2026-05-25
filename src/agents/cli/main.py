@@ -11,7 +11,7 @@ Subcommands:
     hai todo ls [--all]
     hai todo done <id>
 
-    hai cost
+    hai cost [--days N] [--json]
     hai auth set-token <value>
     hai auth show
 
@@ -272,12 +272,44 @@ def cmd_todo_done(args: argparse.Namespace) -> None:
 # ---------- cost ----------
 
 
-def cmd_cost(_args: argparse.Namespace) -> None:
+def _render_cost_table(data: dict[str, Any]) -> None:
+    """Pretty-print usage stats from /admin/cost."""
+    days = data.get("days", "?")
+    total = data.get("total_tasks", 0)
+    print(f"Task completions — last {days} day(s)   total: {total}")
+    print()
+
+    by_agent: dict[str, int] = data.get("by_agent") or {}
+    if by_agent:
+        print(f"{'AGENT':30s}  {'COUNT':>6s}")
+        print(f"{'─' * 30}  {'─' * 6}")
+        for agent, count in by_agent.items():
+            print(f"{agent:30s}  {count:>6d}")
+        print()
+
+    by_source: dict[str, int] = data.get("by_source") or {}
+    if by_source:
+        print(f"{'SOURCE':30s}  {'COUNT':>6s}")
+        print(f"{'─' * 30}  {'─' * 6}")
+        for source, count in by_source.items():
+            print(f"{source:30s}  {count:>6d}")
+
+    print()
+    print(
+        "# TODO: add model/local vs claude column when provenance lands"
+    )
+
+
+def cmd_cost(args: argparse.Namespace) -> None:
     cfg = load_config()
     _need_token(cfg)
     with HaiClient(cfg) as client:
-        resp = client.request("GET", "/admin/costs/today")
+        resp = client.request("GET", "/admin/cost", params={"days": args.days})
+    if args.json:
         _print_json(resp)
+        return
+    assert isinstance(resp, dict)
+    _render_cost_table(resp)
 
 
 # ---------- auth ----------
@@ -315,7 +347,7 @@ def cmd_auth_init(args: argparse.Namespace) -> None:
 # ---------- argparse wiring ----------
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     p = argparse.ArgumentParser(
         prog="hai",
         description="Rob's CLI to the HomeAIOps pipeline.",
@@ -388,7 +420,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_todo_done.set_defaults(func=cmd_todo_done)
 
     # cost
-    p_cost = sub.add_parser("cost", help="show today's spend vs caps")
+    p_cost = sub.add_parser("cost", help="show task usage counts by agent and source")
+    p_cost.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        metavar="N",
+        help="look-back window in days (default 7)",
+    )
+    p_cost.add_argument("--json", action="store_true", help="emit raw JSON instead of the table")
     p_cost.set_defaults(func=cmd_cost)
 
     # auth
