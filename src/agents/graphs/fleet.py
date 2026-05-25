@@ -74,7 +74,9 @@ def _with_activity_log(
     under strict mypy. The runtime accepts any callable.
     """
 
-    def _log_end(state: FleetState, result: dict[str, Any], t0: float, token: Any) -> dict[str, Any]:
+    def _log_end(
+        state: FleetState, result: dict[str, Any], t0: float, token: Any
+    ) -> dict[str, Any]:
         duration_s = time.perf_counter() - t0
         output = str(result.get("output", "") or "")[:200]
         outcome = "success" if "CANCELLED" not in output else "error"
