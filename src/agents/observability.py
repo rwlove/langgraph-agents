@@ -25,6 +25,11 @@ The label set is the v20-locked schema and shared across phases 2/4/6.
 Phase 2's LLM factory will be the primary emitter; phase 6's Claude leg
 adds ``trigger=requires_cloud|degraded_mode|policy_allowlist`` to the
 ``calls_total`` counter via the same handler.
+
+Anthropic pricing is encoded in ``_ANTHROPIC_PRICING`` (USD per 1M tokens).
+The ``LangGraphMetricsCallback`` uses it to populate ``langgraph_cost_usd_total``
+on every Claude call. Local Ollama calls emit cost_usd=0 (no token price).
+Update the table when Anthropic publishes new prices.
 """
 
 from __future__ import annotations
@@ -65,6 +70,47 @@ if TYPE_CHECKING:
 
 _LANGFUSE_LOGGER = logging.getLogger("agents.observability.langfuse")
 _langfuse_client: Langfuse | None = None
+
+# ---------------------------------------------------------------------------
+# Anthropic pricing table (USD per 1 million tokens).
+#
+# Keys are model name prefixes — matched via str.startswith() so minor
+# version suffixes (e.g. "claude-opus-4-7", "claude-sonnet-4-5") fall
+# through correctly. Entries are (input_price, output_price) in USD/MTok.
+#
+# Source: https://www.anthropic.com/pricing (checked 2026-05-25).
+# Update this table when Anthropic publishes new prices; the change is a
+# one-liner here, no schema change needed.
+# ---------------------------------------------------------------------------
+
+_ANTHROPIC_PRICING: list[tuple[str, float, float]] = [
+    # (model_prefix, input_usd_per_mtok, output_usd_per_mtok)
+    ("claude-opus-4", 15.0, 75.0),
+    ("claude-opus-3", 15.0, 75.0),
+    ("claude-sonnet-4", 3.0, 15.0),
+    ("claude-sonnet-3-7", 3.0, 15.0),
+    ("claude-sonnet-3-5", 3.0, 15.0),
+    ("claude-haiku-3-5", 0.8, 4.0),
+    ("claude-haiku-3", 0.25, 1.25),
+]
+
+
+def _compute_anthropic_cost(model: str, tokens_in: int, tokens_out: int) -> float:
+    """Return USD cost for an Anthropic API call using the published pricing table.
+
+    Matches on the longest prefix in ``_ANTHROPIC_PRICING`` that the given
+    ``model`` string starts with. Returns 0.0 for unrecognised models (e.g.
+    Ollama local models, or a new Claude model not yet in the table) so
+    callers don't have to guard against it.
+
+    The function is intentionally pure (no I/O, no mutation) so it's safe to
+    call from the metrics callback's hot path.
+    """
+    for prefix, input_price, output_price in _ANTHROPIC_PRICING:
+        if model.startswith(prefix):
+            return (tokens_in * input_price + tokens_out * output_price) / 1_000_000
+    return 0.0
+
 
 # ---------------------------------------------------------------------------
 # Metric definitions (label set is the v20 schema; do not add labels without
@@ -459,6 +505,12 @@ class LangGraphMetricsCallback(BaseCallbackHandler):
             tokens_in = int(usage.get("prompt_tokens", 0) or 0)
             tokens_out = int(usage.get("completion_tokens", 0) or 0)
 
+        # Compute cost for Anthropic models using the published pricing table.
+        # Local Ollama models return 0.0 (no token price); unrecognised model
+        # strings also return 0.0 safely. Cost feeds langgraph_cost_usd_total
+        # which drives cost caps in llm._build_claude + the Grafana dashboard.
+        cost_usd = _compute_anthropic_cost(self.model, tokens_in, tokens_out)
+
         record_llm_call(
             agent=self.agent,
             group=self.group,
@@ -467,6 +519,7 @@ class LangGraphMetricsCallback(BaseCallbackHandler):
             trigger=self.trigger,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            cost_usd=cost_usd,
             duration_seconds=duration,
         )
 
@@ -666,6 +719,7 @@ def instrument_fastapi_app(app: Any) -> None:
 __all__ = [
     "CONTENT_TYPE_LATEST",
     "LangGraphMetricsCallback",
+    "_compute_anthropic_cost",
     "agent_daily_spend_usd",
     "configure_structlog",
     "flush_langfuse",
