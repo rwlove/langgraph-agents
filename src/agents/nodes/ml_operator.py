@@ -155,6 +155,19 @@ class MLFinding(BaseModel):
             "Vault paths, memory entries, prom queries cited, model card URLs, github issues."
         ),
     )
+    analysis: str = Field(
+        default="",
+        description=(
+            "Free-form analysis the structured fields above don't capture. "
+            "Use this for sweep-mode (weekly drift) where you're analyzing "
+            "evidence without proposing a Class-C action: list each notable "
+            "datum from the evidence block + a one-sentence 'why it matters', "
+            "ranked by risk. The eight-clause gate still applies to "
+            "hypothesis / knob_change / blast_radius / rollback when this is "
+            "an action proposal; for sweep mode they can be empty and this "
+            "field carries the substance."
+        ),
+    )
 
 
 def _build_llm() -> BaseChatModel:
@@ -193,7 +206,8 @@ def _render_markdown(f: MLFinding, task_id: str) -> str:
         f"**Summary:** {f.summary}\n\n"
         f"**Knob:** {f.knob} — {f.knob_change}\n"
         f"**VRAM delta:** {f.vram_delta_gib:+.2f} GiB\n\n"
-        "## Failure domain\n\n"
+        + (f"## Analysis\n\n{f.analysis}\n\n" if f.analysis else "")
+        + "## Failure domain\n\n"
         f"{f.failure_domain}\n\n"
         "## Baseline\n\n"
         f"{f.current_baseline}\n\n"
@@ -246,7 +260,15 @@ def ml_operator_node(state: FleetState) -> dict[str, Any]:
                 "langgraph production activation, HolmesGPT timeout revert), "
                 "set spark_gated=true AND recovery_path_touched=true AND "
                 "action_class=A. Verbatim rollback. Run the eight-clause "
-                "execution gate before choosing action_class C."
+                "execution gate before choosing action_class C.\n\n"
+                "SWEEP MODE: when the REQUEST is a weekly drift sweep "
+                "(no specific knob being proposed) and includes "
+                "pre-fetched evidence, set action_class=A and put your "
+                "substance in the `analysis` field — ranked findings "
+                "from the evidence + one-sentence 'why it matters' + "
+                "single recommended next step per finding. Leave "
+                "hypothesis/knob_change/blast_radius/rollback empty in "
+                "sweep mode; those are for action proposals only."
             )
         ),
     ]
