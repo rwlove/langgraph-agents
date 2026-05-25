@@ -46,6 +46,9 @@ async def gather_evidence(agent_id: AgentId, request: str) -> str:
     except GraphRecursionError:
         slog.warning("evidence_gather_recursion_limit_hit", agent=agent_id)
         return ""
+    except Exception as exc:
+        slog.warning("evidence_gather_failed", agent=agent_id, error=str(exc))
+        return ""
 
     messages = result.get("messages", [])
     if not messages:

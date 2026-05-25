@@ -27,7 +27,7 @@ from agents.state import AgentId, FleetState
 _AGENT_ID: AgentId = "reporter"
 _TEMPERATURE = 0.3
 _MAX_CONTENT_CHARS = 2000
-_MAX_OUTPUT_CHARS = 3000
+_MAX_OUTPUT_CHARS = 6000
 
 slog = get_logger("nodes.reporter")
 
@@ -82,9 +82,13 @@ def reporter_node(state: FleetState) -> dict[str, Any]:
     ask = "\n\n".join(materials) + (
         "\n\n## Your task\n"
         "Render this into a Zulip-markdown DM per your SOUL.\n"
-        "- Show vault paths as monospace `code` text (no `obsidian://` "
-        "links — they break in Gmail forwards). Trim the leading "
-        "`/vault/` prefix.\n"
+        "- When the specialist output already contains an `obsidian://` "
+        "link, preserve it as-is — it is a deep-link to the vault file "
+        "on the user's devices.\n"
+        "- If the specialist output includes a full vault document below "
+        "a divider (`---`), pass it through verbatim inside a Zulip "
+        "quote block (prefix each line with `> `) so it renders "
+        "readable without being reformatted.\n"
         "- Convert raw https URLs into `[labeled](url)` markdown links.\n"
         "- Don't include the task ID in the body — the meta footer "
         "(added by the completion-post webhook) carries the open-task "

@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from agents.settings import get_settings
 
@@ -32,6 +33,20 @@ class WriteResult:
 
     path: Path
     bytes_written: int
+
+    def obsidian_uri(self, vault_name: str = "claude") -> str:
+        """Return an obsidian:// deep-link for this file.
+
+        Strips the vault root from the absolute path so the URI contains only
+        the vault-relative portion (e.g. ``inbox/drafts/network-t-net-001.md``).
+        Falls back to the filename alone if the path isn't under the vault root.
+        """
+        settings = get_settings()
+        try:
+            rel = self.path.relative_to(settings.vault_root)
+        except ValueError:
+            rel = Path(self.path.name)
+        return f"obsidian://open?vault={quote(vault_name)}&file={quote(str(rel))}"
 
 
 @dataclass(frozen=True)

@@ -103,8 +103,9 @@ async def test_homelab_engineer_writes_finding_to_vault(temp_vault: Path) -> Non
     assert "alertmanager" in body
     # Verbatim rollback must be inside a code fence when present.
     assert "```\n# kubernetes/apps/observability" in body
-    assert "class=C" in result["output"]
-    assert "handoff=errand-runner" in result["output"]
+    assert "obsidian://" in result["output"]
+    assert "action_class: C" in result["output"]
+    assert "handoff_target: errand-runner" in result["output"]
 
 
 async def test_homelab_engineer_renders_without_rollback_for_question(

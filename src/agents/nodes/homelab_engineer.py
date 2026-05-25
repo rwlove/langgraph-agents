@@ -135,10 +135,12 @@ async def homelab_engineer_node(state: FleetState) -> dict[str, Any]:
     markdown = _render_markdown(finding, state.task_id)
     result = write_draft(state.task_id, markdown, kind="homelab")
 
+    obsidian_link = result.obsidian_uri()
     update: dict[str, Any] = {
         "output": (
-            f"homelab finding: {result.path} "
-            f"(class={finding.action_class}, handoff={finding.handoff_target})"
+            f"[Open in Obsidian ↗]({obsidian_link})\n\n"
+            "---\n\n"
+            f"{markdown}"
         ),
     }
 
