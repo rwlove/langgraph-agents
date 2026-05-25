@@ -9,7 +9,7 @@ coverage that PR #39 introduced for smart-home-operator.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from agents.nodes.homelab_engineer import HomelabFinding, homelab_engineer_node
 from agents.personas import invalidate_cache, load_persona
@@ -77,7 +77,7 @@ def _fake_question_finding() -> HomelabFinding:
     )
 
 
-def test_homelab_engineer_writes_finding_to_vault(temp_vault: Path) -> None:
+async def test_homelab_engineer_writes_finding_to_vault(temp_vault: Path) -> None:
     state = FleetState(
         task_id="t-hl-001",
         source="zulip",
@@ -88,8 +88,9 @@ def test_homelab_engineer_writes_finding_to_vault(temp_vault: Path) -> None:
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.homelab_engineer._build_llm", return_value=_FakeLLM()):
-        result = homelab_engineer_node(state)
+    with patch("agents.nodes.homelab_engineer._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.homelab_engineer.gather_evidence", new=AsyncMock(return_value="")):
+        result = await homelab_engineer_node(state)
 
     expected_path = temp_vault / "inbox" / "drafts" / "homelab-t-hl-001.md"
     assert expected_path.exists()
@@ -106,7 +107,7 @@ def test_homelab_engineer_writes_finding_to_vault(temp_vault: Path) -> None:
     assert "handoff=errand-runner" in result["output"]
 
 
-def test_homelab_engineer_renders_without_rollback_for_question(
+async def test_homelab_engineer_renders_without_rollback_for_question(
     temp_vault: Path,
 ) -> None:
     """A Class-A analysis-only finding has no rollback (default empty).
@@ -121,8 +122,9 @@ def test_homelab_engineer_renders_without_rollback_for_question(
         def invoke(self, _messages):
             return _fake_question_finding()
 
-    with patch("agents.nodes.homelab_engineer._build_llm", return_value=_FakeLLM()):
-        homelab_engineer_node(state)
+    with patch("agents.nodes.homelab_engineer._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.homelab_engineer.gather_evidence", new=AsyncMock(return_value="")):
+        await homelab_engineer_node(state)
 
     body = (temp_vault / "inbox" / "drafts" / "homelab-t-hl-002.md").read_text()
     # No rollback section when finding.rollback is empty (no empty code fence).
@@ -157,7 +159,7 @@ def test_homelab_engineer_persona_loads(temp_vault: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_homelab_engineer_composes_approval_request_for_action(
+async def test_homelab_engineer_composes_approval_request_for_action(
     temp_vault: Path,
 ) -> None:
     """A Class-C homelab finding handed to errand-runner MUST populate
@@ -173,8 +175,9 @@ def test_homelab_engineer_composes_approval_request_for_action(
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.homelab_engineer._build_llm", return_value=_FakeLLM()):
-        update = homelab_engineer_node(state)
+    with patch("agents.nodes.homelab_engineer._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.homelab_engineer.gather_evidence", new=AsyncMock(return_value="")):
+        update = await homelab_engineer_node(state)
 
     assert update["target_agent"] == "errand-runner"
     req = update["approval_request"]
@@ -190,7 +193,7 @@ def test_homelab_engineer_composes_approval_request_for_action(
     assert "helmrelease" in req.payload_summary.lower() or "alertmanager" in req.payload_summary
 
 
-def test_homelab_engineer_skips_approval_for_question(temp_vault: Path) -> None:
+async def test_homelab_engineer_skips_approval_for_question(temp_vault: Path) -> None:
     """A Class-A analysis-only finding with handoff_target=user must NOT
     set approval_request or target_agent — the existing question/research
     path stays END-only."""
@@ -204,8 +207,9 @@ def test_homelab_engineer_skips_approval_for_question(temp_vault: Path) -> None:
         def invoke(self, _messages):
             return _fake_question_finding()
 
-    with patch("agents.nodes.homelab_engineer._build_llm", return_value=_FakeLLM()):
-        update = homelab_engineer_node(state)
+    with patch("agents.nodes.homelab_engineer._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.homelab_engineer.gather_evidence", new=AsyncMock(return_value="")):
+        update = await homelab_engineer_node(state)
 
     assert "approval_request" not in update
     assert "target_agent" not in update

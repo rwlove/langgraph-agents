@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agents.llm import llm
+from agents.nodes._evidence import gather_evidence
 from agents.personas import load_persona
 from agents.state import ActionClass, AgentId, ApprovalRequest, FleetState
 from agents.tools.obsidian import write_draft
@@ -99,10 +100,16 @@ def _render_markdown(finding: HomelabFinding, task_id: str) -> str:
     )
 
 
-def homelab_engineer_node(state: FleetState) -> dict[str, Any]:
+async def homelab_engineer_node(state: FleetState) -> dict[str, Any]:
     """Diagnose + propose for any home-ops cluster work."""
+    evidence = await gather_evidence(_AGENT_ID, state.content)
+    evidence_block = (
+        f"\n\nPRE-FETCHED EVIDENCE (from MCP tools):\n{evidence}"
+        if evidence else ""
+    )
+
     persona = load_persona(_AGENT_ID)
-    llm = _build_llm()
+    model = _build_llm()
 
     triage_hint = ""
     if state.triage:
@@ -116,7 +123,7 @@ def homelab_engineer_node(state: FleetState) -> dict[str, Any]:
         SystemMessage(content=persona),
         HumanMessage(
             content=(
-                f"REQUEST:\n\n{state.content}{triage_hint}\n\n"
+                f"REQUEST:\n\n{state.content}{evidence_block}{triage_hint}\n\n"
                 "Produce a HomelabFinding. Stability bias: name SPOFs and "
                 "blocking dependencies explicitly. Class C+ actions hand off "
                 "to errand-runner with signed approval."
@@ -124,7 +131,7 @@ def homelab_engineer_node(state: FleetState) -> dict[str, Any]:
         ),
     ]
 
-    finding: HomelabFinding = llm.invoke(messages)  # type: ignore[assignment]
+    finding: HomelabFinding = model.invoke(messages)  # type: ignore[assignment]
     markdown = _render_markdown(finding, state.task_id)
     result = write_draft(state.task_id, markdown, kind="homelab")
 

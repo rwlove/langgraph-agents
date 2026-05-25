@@ -8,7 +8,7 @@ devices, HA recorder, core integration disable) AND sleep_hours_warning
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -104,7 +104,7 @@ def _fake_safety_device_finding() -> SmartHomeFinding:
     )
 
 
-def test_smart_home_operator_writes_finding_to_vault(temp_vault: Path) -> None:
+async def test_smart_home_operator_writes_finding_to_vault(temp_vault: Path) -> None:
     state = FleetState(
         task_id="t-sh-001",
         source="zulip",
@@ -115,8 +115,9 @@ def test_smart_home_operator_writes_finding_to_vault(temp_vault: Path) -> None:
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()):
-        result = smart_home_operator_node(state)
+    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.smart_home_operator.gather_evidence", new=AsyncMock(return_value="")):
+        result = await smart_home_operator_node(state)
 
     expected_path = temp_vault / "inbox" / "drafts" / "smart-home-t-sh-001.md"
     assert expected_path.exists()
@@ -133,7 +134,7 @@ def test_smart_home_operator_writes_finding_to_vault(temp_vault: Path) -> None:
     assert "handoff=errand-runner" in result["output"]
 
 
-def test_smart_home_operator_surfaces_safety_device_touched(temp_vault: Path) -> None:
+async def test_smart_home_operator_surfaces_safety_device_touched(temp_vault: Path) -> None:
     state = FleetState(
         task_id="t-sh-002",
         source="text",
@@ -144,8 +145,9 @@ def test_smart_home_operator_surfaces_safety_device_touched(temp_vault: Path) ->
         def invoke(self, _messages):
             return _fake_safety_device_finding()
 
-    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()):
-        result = smart_home_operator_node(state)
+    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.smart_home_operator.gather_evidence", new=AsyncMock(return_value="")):
+        result = await smart_home_operator_node(state)
 
     body = (temp_vault / "inbox" / "drafts" / "smart-home-t-sh-002.md").read_text()
     assert "recovery_path_touched: True" in body
@@ -223,7 +225,7 @@ def _fake_action_finding() -> SmartHomeFinding:
     )
 
 
-def test_smart_home_operator_composes_approval_request_for_action(
+async def test_smart_home_operator_composes_approval_request_for_action(
     temp_vault: Path,
 ) -> None:
     """A Class-C finding handed to errand-runner MUST populate
@@ -239,8 +241,9 @@ def test_smart_home_operator_composes_approval_request_for_action(
         def invoke(self, _messages):
             return _fake_action_finding()
 
-    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()):
-        update = smart_home_operator_node(state)
+    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.smart_home_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await smart_home_operator_node(state)
 
     assert update["target_agent"] == "errand-runner"
     req = update["approval_request"]
@@ -256,7 +259,7 @@ def test_smart_home_operator_composes_approval_request_for_action(
     assert "light.turn_off" in req.payload_summary
 
 
-def test_smart_home_operator_skips_approval_for_question(temp_vault: Path) -> None:
+async def test_smart_home_operator_skips_approval_for_question(temp_vault: Path) -> None:
     """A Class-A (analysis-only) finding with handoff_target=user must NOT
     set approval_request or target_agent — the existing question/research
     path stays END-only."""
@@ -280,14 +283,15 @@ def test_smart_home_operator_skips_approval_for_question(temp_vault: Path) -> No
         def invoke(self, _messages):
             return finding
 
-    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()):
-        update = smart_home_operator_node(state)
+    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.smart_home_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await smart_home_operator_node(state)
 
     assert "approval_request" not in update
     assert "target_agent" not in update
 
 
-def test_smart_home_operator_skips_approval_for_class_b_handoff(
+async def test_smart_home_operator_skips_approval_for_class_b_handoff(
     temp_vault: Path,
 ) -> None:
     """A Class-B vault-draft handoff (handoff_target=errand-runner is
@@ -314,8 +318,9 @@ def test_smart_home_operator_skips_approval_for_class_b_handoff(
         def invoke(self, _messages):
             return finding
 
-    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()):
-        update = smart_home_operator_node(state)
+    with patch("agents.nodes.smart_home_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.smart_home_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await smart_home_operator_node(state)
 
     assert "approval_request" not in update
     assert "target_agent" not in update
