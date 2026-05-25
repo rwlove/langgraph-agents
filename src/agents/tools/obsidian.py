@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from agents.settings import get_settings
 
@@ -45,7 +46,6 @@ class WriteResult:
             rel = self.path.relative_to(settings.vault_root)
         except ValueError:
             rel = Path(self.path.name)
-        from urllib.parse import quote
         return f"obsidian://open?vault={quote(vault_name)}&file={quote(str(rel))}"
 
 
