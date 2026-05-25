@@ -84,7 +84,85 @@ _AGENT_TOOL_NAMES: dict[AgentId, frozenset[str]] = {
         "kubectl_get_events",
         "kubectl_get_logs",
     }),
-    # Other agents land in follow-up PRs as their toolsets get curated.
+    "network-operator": frozenset({
+        # Read-only Omada SDN + Netbox. No write tools — the network-operator
+        # proposes changes; a human applies them. Omada site/device/SSID/LAN/WAN
+        # cover topology enumeration; alerts + events cover active incidents.
+        # Netbox provides the CMDB view (IPs, prefixes, device roles).
+        "omada_listSites",
+        "omada_listDevices",
+        "omada_getSsidList",
+        "omada_getLanNetworkList",
+        "omada_getGatewayWanStatus",
+        "omada_getFirewallSetting",
+        "omada_listSiteAlerts",
+        "omada_listSiteEvents",
+        "netbox_netbox_get_objects",
+        "netbox_netbox_search_objects",
+        "netbox_netbox_get_object_by_id",
+    }),
+    "storage-operator": frozenset({
+        # Ceph / Longhorn / Garage are visible through kubectl; no Ceph API
+        # tools in the gateway catalog yet. PVC + PV + StorageClass cover
+        # capacity and binding state. Pods + deployments let the operator
+        # check what's consuming storage. Events surface recent failures.
+        "kubectl_get_pvcs",
+        "kubectl_get_persistent_volumes",
+        "kubectl_get_storage_classes",
+        "kubectl_get_pods",
+        "kubectl_get_deployments",
+        "kubectl_get_namespaces",
+        "kubectl_describe",
+        "kubectl_get_events",
+    }),
+    "observability-operator": frozenset({
+        # Prometheus for metrics, Loki for logs, Grafana for dashboards and
+        # alert state. kubectl supplements for pod/event correlation when a
+        # metric anomaly needs a cluster-side explanation.
+        "grafana_query_prometheus",
+        "grafana_list_prometheus_metric_names",
+        "grafana_query_loki_logs",
+        "grafana_list_loki_label_names",
+        "grafana_get_alert_group",
+        "grafana_list_alert_groups",
+        "grafana_search_dashboards",
+        "grafana_get_dashboard_summary",
+        "kubectl_get_pods",
+        "kubectl_get_events",
+    }),
+    "homelab-engineer": frozenset({
+        # Broad cluster-state read access. The homelab-engineer is the
+        # generalist; it needs the widest kubectl surface of the operator
+        # set. StatefulSets + DaemonSets + ConfigMaps + Services round out
+        # the topology picture beyond what the specialists need.
+        "kubectl_get_pods",
+        "kubectl_get_deployments",
+        "kubectl_get_namespaces",
+        "kubectl_get_nodes",
+        "kubectl_describe",
+        "kubectl_get_events",
+        "kubectl_get_logs",
+        "kubectl_health_check",
+        "kubectl_get_statefulsets",
+        "kubectl_get_daemonsets",
+        "kubectl_get_configmaps",
+        "kubectl_get_services",
+    }),
+    "smart-home-operator": frozenset({
+        # Read-only HA state. No `ha_ha_call_service` — write ops are
+        # proposed and executed via HA automations or Rob's confirmation.
+        # Entity + state + history covers sensor/switch/climate reasoning;
+        # system_health + logs cover HA-core incidents.
+        "ha_ha_get_state",
+        "ha_ha_get_entity",
+        "ha_ha_search_entities",
+        "ha_ha_get_history",
+        "ha_ha_get_logs",
+        "ha_ha_get_overview",
+        "ha_ha_get_system_health",
+        "ha_ha_list_services",
+        "ha_ha_get_device",
+    }),
 }
 
 
