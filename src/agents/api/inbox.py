@@ -78,10 +78,19 @@ class InboxRequest(BaseModel):
     # prompts to errand-runner. None = let triager decide as before.
     target_agent: str | None = None
 
+    # When set, the worker uses this as the LangGraph thread_id instead
+    # of the queue-assigned task_id. Pass the `conversation_id` from a
+    # prior response to continue that thread (multi-turn conversation).
+    # Absent → new thread, new task_id becomes the conversation_id.
+    conversation_id: str | None = None
+
 
 class InboxResponse(BaseModel):
     task_id: str
     status: str  # "accepted" | "duplicate"
+    # The LangGraph thread_id used for this task. Pass as `conversation_id`
+    # on the next request to continue the same conversation thread.
+    conversation_id: str
     # Legacy callers may still read these; both are absent post-cutover.
     # Poll `/admin/tasks/<id>` for the final output.
     output: str | None = None
@@ -165,7 +174,11 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
                 idempotency_key=req.idempotency_key,
                 returned_task_id=prior_task_id,
             )
-            return InboxResponse(task_id=prior_task_id, status="duplicate")
+            return InboxResponse(
+                task_id=prior_task_id,
+                conversation_id=prior_task_id,
+                status="duplicate",
+            )
 
     envelope: dict[str, Any] = req.model_dump(mode="json")
     queue_task_id = await queue.enqueue(envelope)
@@ -178,10 +191,15 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     )
     _annotate_current_span(req, queue_task_id)
 
+    # The LangGraph thread_id is either the caller-supplied conversation_id
+    # (thread continuation) or the queue-assigned task_id (new thread).
+    conversation_id = req.conversation_id or queue_task_id
+
     slog.info(
         "inbox_enqueued",
         client_task_id=req.task_id,
         queue_task_id=queue_task_id,
+        conversation_id=conversation_id,
         content_preview=req.content[:120],
     )
-    return InboxResponse(task_id=queue_task_id, status="accepted")
+    return InboxResponse(task_id=queue_task_id, conversation_id=conversation_id, status="accepted")

@@ -71,16 +71,22 @@ def cmd_task_add(args: argparse.Namespace) -> None:
     cfg = load_config()
     _need_token(cfg)
     with HaiClient(cfg) as client:
-        body = {
+        body: dict[str, Any] = {
             "task_id": _ulid_ish_id("cli"),
             "source": "cli",
             "user": "rob",
             "content": args.content,
         }
+        if args.conversation_id:
+            body["conversation_id"] = args.conversation_id
         resp = client.request("POST", "/inbox", json=body)
         assert isinstance(resp, dict)
         task_id = resp["task_id"]
-        print(f"task_id: {task_id}  status: {resp.get('status', 'accepted')}")
+        conversation_id = resp.get("conversation_id", task_id)
+        print(
+            f"task_id: {task_id}  conversation_id: {conversation_id}"
+            f"  status: {resp.get('status', 'accepted')}"
+        )
         if args.no_tail:
             return
         _tail(client, cfg, task_id)
@@ -324,6 +330,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_task_add.add_argument("content")
     p_task_add.add_argument(
         "--no-tail", action="store_true", help="don't block waiting for the result"
+    )
+    p_task_add.add_argument(
+        "--conversation-id",
+        metavar="ID",
+        default=None,
+        help="continue an existing conversation thread (pass conversation_id from prior response)",
     )
     p_task_add.set_defaults(func=cmd_task_add)
 
