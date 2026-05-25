@@ -9,7 +9,7 @@ role enforces is naming BOTH failure directions on every proposal.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -141,7 +141,7 @@ def _fake_recovery_path_finding() -> ObservabilityFinding:
     )
 
 
-def test_observability_operator_writes_finding_to_vault(temp_vault: Path) -> None:
+async def test_observability_operator_writes_finding_to_vault(temp_vault: Path) -> None:
     state = FleetState(
         task_id="t-obs-001",
         source="zulip",
@@ -152,8 +152,9 @@ def test_observability_operator_writes_finding_to_vault(temp_vault: Path) -> Non
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()):
-        result = observability_operator_node(state)
+    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.observability_operator.gather_evidence", new=AsyncMock(return_value="")):
+        result = await observability_operator_node(state)
 
     expected_path = temp_vault / "inbox" / "drafts" / "observability-t-obs-001.md"
     assert expected_path.exists()
@@ -176,7 +177,7 @@ def test_observability_operator_writes_finding_to_vault(temp_vault: Path) -> Non
     assert "for_clause=True" in result["output"]
 
 
-def test_observability_operator_surfaces_recovery_path_touched(temp_vault: Path) -> None:
+async def test_observability_operator_surfaces_recovery_path_touched(temp_vault: Path) -> None:
     """Disabling a receiver / silencing an alert class must surface the warning."""
     state = FleetState(
         task_id="t-obs-002",
@@ -188,8 +189,9 @@ def test_observability_operator_surfaces_recovery_path_touched(temp_vault: Path)
         def invoke(self, _messages):
             return _fake_recovery_path_finding()
 
-    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()):
-        result = observability_operator_node(state)
+    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.observability_operator.gather_evidence", new=AsyncMock(return_value="")):
+        result = await observability_operator_node(state)
 
     body = (temp_vault / "inbox" / "drafts" / "observability-t-obs-002.md").read_text()
     assert "recovery_path_touched: True" in body
@@ -292,7 +294,7 @@ def test_observability_operator_persona_loads(temp_vault: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_observability_operator_composes_approval_request_for_action(
+async def test_observability_operator_composes_approval_request_for_action(
     temp_vault: Path,
 ) -> None:
     """A Class-C observability finding handed to errand-runner MUST populate
@@ -308,8 +310,9 @@ def test_observability_operator_composes_approval_request_for_action(
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()):
-        update = observability_operator_node(state)
+    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.observability_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await observability_operator_node(state)
 
     assert update["target_agent"] == "errand-runner"
     req = update["approval_request"]
@@ -325,7 +328,7 @@ def test_observability_operator_composes_approval_request_for_action(
     assert "PrometheusRule" in req.payload_summary
 
 
-def test_observability_operator_skips_approval_for_question(temp_vault: Path) -> None:
+async def test_observability_operator_skips_approval_for_question(temp_vault: Path) -> None:
     """A Class-A (recovery-path, analysis-only) finding with handoff_target=user
     must NOT set approval_request or target_agent — the existing question/
     research path stays END-only."""
@@ -339,8 +342,9 @@ def test_observability_operator_skips_approval_for_question(temp_vault: Path) ->
         def invoke(self, _messages):
             return _fake_recovery_path_finding()
 
-    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()):
-        update = observability_operator_node(state)
+    with patch("agents.nodes.observability_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.observability_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await observability_operator_node(state)
 
     assert "approval_request" not in update
     assert "target_agent" not in update

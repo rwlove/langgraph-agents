@@ -10,7 +10,7 @@ specialist must round-trip cleanly.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -93,7 +93,7 @@ def _fake_recovery_path_finding() -> NetworkFinding:
     )
 
 
-def test_network_operator_writes_finding_to_vault(temp_vault: Path) -> None:
+async def test_network_operator_writes_finding_to_vault(temp_vault: Path) -> None:
     """The node writes a draft to inbox/drafts/network-<task_id>.md."""
     state = FleetState(
         task_id="t-net-001",
@@ -108,8 +108,9 @@ def test_network_operator_writes_finding_to_vault(temp_vault: Path) -> None:
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.network_operator._build_llm", return_value=_FakeLLM()):
-        result = network_operator_node(state)
+    with patch("agents.nodes.network_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.network_operator.gather_evidence", new=AsyncMock(return_value="")):
+        result = await network_operator_node(state)
 
     expected_path = temp_vault / "inbox" / "drafts" / "network-t-net-001.md"
     assert expected_path.exists()
@@ -129,7 +130,7 @@ def test_network_operator_writes_finding_to_vault(temp_vault: Path) -> None:
     assert "recovery_path=False" in result["output"]
 
 
-def test_network_operator_surfaces_recovery_path_touched(temp_vault: Path) -> None:
+async def test_network_operator_surfaces_recovery_path_touched(temp_vault: Path) -> None:
     """A change touching brain/wg-easy/OOB/DNS/mgmt must surface the warning."""
     state = FleetState(
         task_id="t-net-002",
@@ -141,8 +142,9 @@ def test_network_operator_surfaces_recovery_path_touched(temp_vault: Path) -> No
         def invoke(self, _messages):
             return _fake_recovery_path_finding()
 
-    with patch("agents.nodes.network_operator._build_llm", return_value=_FakeLLM()):
-        result = network_operator_node(state)
+    with patch("agents.nodes.network_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.network_operator.gather_evidence", new=AsyncMock(return_value="")):
+        result = await network_operator_node(state)
 
     body = (temp_vault / "inbox" / "drafts" / "network-t-net-002.md").read_text()
     assert "recovery_path_touched: True" in body
@@ -222,7 +224,7 @@ def test_network_operator_persona_loads(temp_vault: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_network_operator_composes_approval_request_for_action(
+async def test_network_operator_composes_approval_request_for_action(
     temp_vault: Path,
 ) -> None:
     """A Class-C network finding handed to errand-runner MUST populate
@@ -238,8 +240,9 @@ def test_network_operator_composes_approval_request_for_action(
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.network_operator._build_llm", return_value=_FakeLLM()):
-        update = network_operator_node(state)
+    with patch("agents.nodes.network_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.network_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await network_operator_node(state)
 
     assert update["target_agent"] == "errand-runner"
     req = update["approval_request"]
@@ -255,7 +258,7 @@ def test_network_operator_composes_approval_request_for_action(
     assert "Omada ACL rule" in req.payload_summary or "ACL" in req.payload_summary
 
 
-def test_network_operator_skips_approval_for_question(temp_vault: Path) -> None:
+async def test_network_operator_skips_approval_for_question(temp_vault: Path) -> None:
     """A Class-A (recovery-path, analysis-only) finding with handoff_target=user
     must NOT set approval_request or target_agent — the existing question/
     research path stays END-only."""
@@ -269,8 +272,9 @@ def test_network_operator_skips_approval_for_question(temp_vault: Path) -> None:
         def invoke(self, _messages):
             return _fake_recovery_path_finding()
 
-    with patch("agents.nodes.network_operator._build_llm", return_value=_FakeLLM()):
-        update = network_operator_node(state)
+    with patch("agents.nodes.network_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.network_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await network_operator_node(state)
 
     assert "approval_request" not in update
     assert "target_agent" not in update
