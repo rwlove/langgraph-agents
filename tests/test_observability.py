@@ -17,6 +17,7 @@ from langchain_core.outputs import Generation, LLMResult
 from agents.observability import (
     CONTENT_TYPE_LATEST,
     LangGraphMetricsCallback,
+    _compute_anthropic_cost,
     configure_structlog,
     get_logger,
     langgraph_calls_total,
@@ -225,3 +226,85 @@ def test_metrics_endpoint_served_by_fastapi(app_client: TestClient) -> None:
     assert resp.status_code == 200
     assert "langgraph_calls_total" in resp.text
     assert resp.headers["content-type"].startswith("text/plain")
+
+
+# ---------------------------------------------------------------------------
+# Anthropic pricing table tests
+# ---------------------------------------------------------------------------
+
+
+def test_compute_anthropic_cost_opus() -> None:
+    """1M input + 1M output at Opus pricing = $15 + $75 = $90."""
+    cost = _compute_anthropic_cost("claude-opus-4-7", 1_000_000, 1_000_000)
+    assert abs(cost - 90.0) < 0.01, cost
+
+
+def test_compute_anthropic_cost_sonnet() -> None:
+    """1M input + 1M output at Sonnet 4 pricing = $3 + $15 = $18."""
+    cost = _compute_anthropic_cost("claude-sonnet-4-5", 1_000_000, 1_000_000)
+    assert abs(cost - 18.0) < 0.01, cost
+
+
+def test_compute_anthropic_cost_haiku() -> None:
+    """1M input + 1M output at Haiku 3.5 pricing = $0.8 + $4 = $4.8."""
+    cost = _compute_anthropic_cost("claude-haiku-3-5", 1_000_000, 1_000_000)
+    assert abs(cost - 4.8) < 0.01, cost
+
+
+def test_compute_anthropic_cost_unknown_model_returns_zero() -> None:
+    """Local Ollama models and unrecognised strings return 0.0."""
+    assert _compute_anthropic_cost("qwen2.5:32b", 100_000, 50_000) == 0.0
+    assert _compute_anthropic_cost("", 100_000, 50_000) == 0.0
+    assert _compute_anthropic_cost("claude-future-9", 100_000, 50_000) == 0.0
+
+
+def test_compute_anthropic_cost_small_call() -> None:
+    """100 input tokens + 50 output tokens at Sonnet 4 pricing."""
+    # $3/MTok input: 100 tokens = $0.0003
+    # $15/MTok output: 50 tokens = $0.00075
+    # total = $0.00105
+    cost = _compute_anthropic_cost("claude-sonnet-4-5", 100, 50)
+    assert abs(cost - 0.00105) < 1e-9, cost
+
+
+def test_callback_emits_cost_usd_for_claude_model() -> None:
+    """LangGraphMetricsCallback.on_llm_end populates cost for Claude models."""
+    model = "claude-sonnet-4-5"
+    cb = LangGraphMetricsCallback(agent="cost-test", group="claude", model=model)
+    run_id = uuid4()
+
+    tokens_in, tokens_out = 1_000_000, 1_000_000  # exactly $18 at Sonnet 4 pricing
+    cb.on_llm_start(serialized={}, prompts=["test"], run_id=run_id)
+    fake_result = LLMResult(
+        generations=[[Generation(text="result")]],
+        llm_output={"token_usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out}},
+    )
+    cb.on_llm_end(fake_result, run_id=run_id)
+
+    cost_val = langgraph_cost_usd_total.labels(
+        agent="cost-test", group="claude", model=model
+    )._value.get()
+    assert abs(cost_val - 18.0) < 0.01, f"expected ~$18 cost, got {cost_val}"
+
+
+def test_callback_emits_zero_cost_for_local_model() -> None:
+    """LangGraphMetricsCallback.on_llm_end emits zero cost for Ollama models."""
+    model = "qwen2.5:32b"
+    cb = LangGraphMetricsCallback(agent="local-cost-test", group="local-spark", model=model)
+    run_id = uuid4()
+
+    before = langgraph_cost_usd_total.labels(
+        agent="local-cost-test", group="local-spark", model=model
+    )._value.get()
+
+    cb.on_llm_start(serialized={}, prompts=["test"], run_id=run_id)
+    fake_result = LLMResult(
+        generations=[[Generation(text="result")]],
+        llm_output={"token_usage": {"prompt_tokens": 1000, "completion_tokens": 500}},
+    )
+    cb.on_llm_end(fake_result, run_id=run_id)
+
+    after = langgraph_cost_usd_total.labels(
+        agent="local-cost-test", group="local-spark", model=model
+    )._value.get()
+    assert after == before, f"local model should emit zero cost, got delta {after - before}"
