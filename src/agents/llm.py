@@ -309,7 +309,7 @@ def _build_ollama(
             agent=agent_id, group=effective_group, model=model, trigger=trigger
         ),
     ]
-    lf = langfuse_callback_handler()
+    lf = langfuse_callback_handler(agent_id)
     if lf is not None:
         callbacks.append(lf)
     return ChatOllama(
@@ -396,7 +396,7 @@ def _build_claude(
             trigger=trigger,
         ),
     ]
-    lf = langfuse_callback_handler()
+    lf = langfuse_callback_handler(agent_id)
     if lf is not None:
         callbacks.append(lf)
     return ChatAnthropic(  # type: ignore[call-arg]

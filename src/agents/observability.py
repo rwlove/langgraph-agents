@@ -590,7 +590,7 @@ def init_langfuse() -> None:
     _LANGFUSE_LOGGER.info("langfuse client initialized (host=%s)", settings.langfuse_host)
 
 
-def langfuse_callback_handler() -> BaseCallbackHandler | None:
+def langfuse_callback_handler(agent_id: str | None = None) -> BaseCallbackHandler | None:
     """Return a fresh LangChain CallbackHandler bound to the process
     Langfuse client, or None when tracing is disabled.
 
@@ -603,10 +603,13 @@ def langfuse_callback_handler() -> BaseCallbackHandler | None:
     """
     if _langfuse_client is None:
         return None
-    # The handler reads trace context from langgraph's run_id + carries
-    # contextvars (task_id, agent) we already bound in api/inbox.py +
-    # graphs/fleet.py — those land on the Langfuse trace as metadata.
-    return LangfuseLangchainCallback()
+    ctx = structlog.contextvars.get_contextvars()
+    task_id = ctx.get("task_id")
+    return LangfuseLangchainCallback(
+        trace_name=agent_id or "unknown-agent",
+        session_id=str(task_id) if task_id else None,
+        tags=[agent_id] if agent_id else [],
+    )
 
 
 def flush_langfuse() -> None:
