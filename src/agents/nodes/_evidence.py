@@ -1,4 +1,5 @@
 """Shared evidence-gathering pre-pass for operator nodes."""
+
 from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -7,6 +8,7 @@ from langgraph.prebuilt import create_react_agent
 
 from agents.llm import llm
 from agents.observability import get_logger
+from agents.settings import get_settings
 from agents.state import AgentId
 from agents.tools.mcp_langchain import build_mcp_tools_for_agent
 
@@ -24,18 +26,28 @@ async def gather_evidence(agent_id: AgentId, request: str) -> str:
     if not tools:
         return ""
 
+    settings = get_settings()
+    prom_uid = settings.grafana_prometheus_datasource_uid
+    loki_uid = settings.grafana_loki_datasource_uid
+
     agent = create_react_agent(
         model=llm(agent_id, temperature=0.1),
         tools=tools,
-        prompt=SystemMessage(content=(
-            "You are a data-gathering sub-agent. Use the provided tools to "
-            "collect factual observations relevant to the request. Do NOT "
-            "produce analysis, recommendations, or prose — only raw tool "
-            "outputs summarised as bullet points: "
-            "`<tool_name>: <key finding>`. "
-            "Stop after you have enough evidence to answer the request, "
-            "or after 8 tool calls — whichever comes first."
-        )),
+        prompt=SystemMessage(
+            content=(
+                "You are a data-gathering sub-agent. Use the provided tools to "
+                "collect factual observations relevant to the request. Do NOT "
+                "produce analysis, recommendations, or prose — only raw tool "
+                "outputs summarised as bullet points: "
+                "`<tool_name>: <key finding>`. "
+                "Stop after you have enough evidence to answer the request, "
+                "or after 8 tool calls — whichever comes first.\n\n"
+                "GRAFANA DATASOURCE UIDs (use exactly as shown — do NOT use "
+                "the display name):\n"
+                f"  Prometheus: {prom_uid}\n"
+                f"  Loki:       {loki_uid}"
+            )
+        ),
     )
 
     try:
