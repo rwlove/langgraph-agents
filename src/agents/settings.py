@@ -160,6 +160,18 @@ class Settings(BaseSettings):
         default="http://mcp-gateway-istio.mcp-system.svc.cluster.local:8080",
         description="MCP gateway base URL.",
     )
+    # Grafana datasource UIDs for grafana-mcp tool calls. The LLM must pass
+    # the UID (not the display name) when calling grafana_query_prometheus or
+    # grafana_query_loki_logs. Obtain via GET /api/datasources on the Grafana
+    # instance and copy the 'uid' field for each datasource.
+    grafana_prometheus_datasource_uid: str = Field(
+        default="PBFA97CFB590B2093",
+        description="Grafana Prometheus datasource UID (passed to grafana_query_prometheus).",
+    )
+    grafana_loki_datasource_uid: str = Field(
+        default="P8E80F9AEF21F6940",
+        description="Grafana Loki datasource UID (passed to grafana_query_loki_logs).",
+    )
 
     # --- observability ---
     langfuse_host: str | None = Field(default=None)
