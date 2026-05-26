@@ -62,6 +62,7 @@ from prometheus_client import (
     Histogram,
     generate_latest,
 )
+from ulid import ULID
 
 from agents.settings import get_settings
 
@@ -610,9 +611,20 @@ def langfuse_callback_handler(agent_id: str | None = None) -> BaseCallbackHandle
     # task share a single Langfuse trace rather than scattering as anonymous
     # orphan traces. Trace name comes from the LangChain run name (model
     # class / chain name) — that's the limit of the v3 LangChain integration.
-    trace_context: TraceContext | None = (
-        TraceContext(trace_id=str(task_id)) if task_id else None
-    )
+    #
+    # Langfuse v3 requires a 32-char lowercase hex trace ID (UUID4 hex
+    # format). task_id is a ULID (26-char Crockford base32) — convert via
+    # the 128-bit integer representation that both encodings share.
+    trace_id: str | None = None
+    if task_id:
+        try:
+            trace_id = UUID(int=int(ULID.from_str(str(task_id)))).hex
+        except Exception:
+            _LANGFUSE_LOGGER.warning(
+                "langfuse_trace_id_conversion_failed",
+                task_id=task_id,
+            )
+    trace_context: TraceContext | None = TraceContext(trace_id=trace_id) if trace_id else None
     return LangfuseLangchainCallback(trace_context=trace_context)
 
 
