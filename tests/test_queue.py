@@ -120,6 +120,33 @@ def test_migrate_split_statements_handles_trailing_no_semicolon() -> None:
     assert stmts == ["CREATE TABLE foo (id INT)", "ALTER TABLE foo ADD COLUMN x INT"]
 
 
+def test_dequeue_excludes_ttl_expired_tasks() -> None:
+    """`dequeue` must never claim a task past its TTL.
+
+    HOMELAB-SPEC Layer 5: an expired task does NOT auto-execute. The
+    guard lives in the inner SELECT so a dead row is skipped atomically
+    under SKIP LOCKED. Pin the SQL shape so a future edit can't drop it.
+    """
+    src = resources.files("agents.queue").joinpath("store.py").read_text()
+    assert "ttl_expires_at IS NULL OR ttl_expires_at > NOW()" in src
+
+
+def test_expire_overdue_routes_to_dlq_atomically() -> None:
+    """`expire_overdue` moves overdue rows to the DLQ in one CTE.
+
+    The DELETE + DLQ INSERT must commit together (a task is never lost
+    between tables) and the marker must be `ttl_expired` so the 4.M3
+    DLQ surface distinguishes timed-out tasks from retry-exhausted ones.
+    """
+    src = resources.files("agents.queue").joinpath("store.py").read_text()
+    assert "async def expire_overdue" in src
+    assert "DELETE FROM task_queue" in src
+    assert "ttl_expires_at < NOW()" in src
+    assert "'ttl_expired'" in src
+    # Both never-claimed and stuck-claim rows are caught.
+    assert "status IN ('pending', 'claimed')" in src
+
+
 def test_taskqueue_attempts_remaining_uses_envelope_policy() -> None:
     """`attempts_remaining` reads max from envelope.retry_policy when set."""
 

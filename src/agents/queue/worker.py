@@ -43,6 +43,7 @@ from agents.observability import get_logger
 from agents.queue.approval_post import post_approval_for_interrupts
 from agents.settings import get_settings
 from agents.state import FleetState
+from agents.tools import pushover
 from agents.tools.zulip import ZulipNotConfiguredError, send_dm
 
 if TYPE_CHECKING:
@@ -76,11 +77,16 @@ class QueueWorker:
         graph: Any,  # CompiledStateGraph; langgraph generic typing is fluid
         *,
         idle_poll_seconds: float = 2.0,
+        sweep_interval_seconds: float = 60.0,
     ) -> None:
         self._queue = queue
         self._pool = pool
         self._graph = graph
         self._idle_poll = idle_poll_seconds
+        self._sweep_interval = sweep_interval_seconds
+        # monotonic timestamp of the last TTL sweep; 0.0 forces a sweep on
+        # the first loop iteration.
+        self._last_sweep = 0.0
         self._worker_id = _worker_id()
         self._stopping = False
 
@@ -89,6 +95,7 @@ class QueueWorker:
         slog.info("queue_worker_started", worker_id=self._worker_id)
         try:
             while not self._stopping:
+                await self._maybe_sweep_expired()
                 try:
                     claim = await self._queue.dequeue(self._worker_id)
                 except Exception as exc:  # pool / DB hiccup
@@ -107,6 +114,57 @@ class QueueWorker:
     async def stop(self) -> None:
         """Signal the loop to exit at the next iteration."""
         self._stopping = True
+
+    async def _maybe_sweep_expired(self) -> None:
+        """Run the TTL-expiry sweep at most once per `sweep_interval`.
+
+        Throttled off the dequeue cadence so a busy queue (which loops
+        with no idle sleep) doesn't hammer the sweep query every
+        iteration. A DB hiccup in the sweep is logged and swallowed —
+        the worker must keep draining real work regardless.
+        """
+        now = time.monotonic()
+        if now - self._last_sweep < self._sweep_interval:
+            return
+        self._last_sweep = now
+        try:
+            expired = await self._queue.expire_overdue()
+        except Exception as exc:  # pool / DB hiccup
+            slog.warning("queue_worker_sweep_error", error=str(exc))
+            return
+        if expired:
+            await self._notify_expired(expired)
+
+    async def _notify_expired(self, expired: list[TaskClaim]) -> None:
+        """Notify Rob that TTL-expired tasks were moved to the DLQ.
+
+        HOMELAB-SPEC Layer 5 requires expiry to surface a summary to
+        Rob, not silently drop. Pushover is the established Tier-1
+        escalation channel (shared with Alertmanager). Best-effort: a
+        Pushover failure must not stall the loop — the rows are already
+        durably in the DLQ for the 4.M3 review surface either way.
+        """
+        count = len(expired)
+        lines: list[str] = []
+        for claim in expired[:10]:
+            intent = str(claim.envelope.get("intent") or claim.envelope.get("content") or "")
+            lines.append(f"• {claim.task_id}: {intent[:80]}")
+        if count > 10:
+            lines.append(f"… and {count - 10} more")
+        message = (
+            f"{count} task(s) hit their TTL before running and were moved to "
+            f"the DLQ for review (they did NOT execute):\n" + "\n".join(lines)
+        )
+        slog.warning("task_ttl_expired_batch", count=count)
+        try:
+            await asyncio.to_thread(
+                pushover.send,
+                "Tasks expired (TTL)",
+                message,
+                priority=1,
+            )
+        except Exception as exc:  # pushover unconfigured / network
+            slog.warning("queue_worker_expire_notify_failed", error=str(exc))
 
     async def _handle_one(self, claim: TaskClaim) -> None:
         """Process one claim: invoke the graph, ack / nack / dlq."""
