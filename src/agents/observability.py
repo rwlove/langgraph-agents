@@ -504,8 +504,9 @@ class LangGraphMetricsCallback(BaseCallbackHandler):
         tokens_out = 0
         if response.llm_output:
             usage = response.llm_output.get("token_usage") or response.llm_output.get("usage") or {}
-            tokens_in = int(usage.get("prompt_tokens", 0) or 0)
-            tokens_out = int(usage.get("completion_tokens", 0) or 0)
+            # Anthropic: input_tokens/output_tokens; Ollama/OpenAI: prompt_tokens/completion_tokens
+            tokens_in = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+            tokens_out = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
 
         # Compute cost for Anthropic models using the published pricing table.
         # Local Ollama models return 0.0 (no token price); unrecognised model
@@ -621,8 +622,7 @@ def langfuse_callback_handler(agent_id: str | None = None) -> BaseCallbackHandle
             trace_id = UUID(int=int(ULID.from_str(str(task_id)))).hex
         except Exception:
             _LANGFUSE_LOGGER.warning(
-                "langfuse_trace_id_conversion_failed",
-                task_id=task_id,
+                "langfuse_trace_id_conversion_failed task_id=%s", task_id
             )
     trace_context: TraceContext | None = TraceContext(trace_id=trace_id) if trace_id else None
     return LangfuseLangchainCallback(trace_context=trace_context)
