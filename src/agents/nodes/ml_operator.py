@@ -24,6 +24,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agents.llm import llm
+from agents.nodes._evidence import gather_evidence
 from agents.personas import load_persona
 from agents.state import ActionClass, AgentId, ApprovalRequest, FleetState
 from agents.tools.obsidian import write_draft
@@ -228,13 +229,19 @@ def _render_markdown(f: MLFinding, task_id: str) -> str:
     )
 
 
-def ml_operator_node(state: FleetState) -> dict[str, Any]:
+async def ml_operator_node(state: FleetState) -> dict[str, Any]:
     """Analyze + propose for any ML / inference request.
 
     Prime-directive enforcement is in the persona; the schema makes the
     gate fields mandatory so a downstream agent can machine-verify the
     safety analysis before acting.
     """
+    evidence = await gather_evidence(_AGENT_ID, state.content)
+    evidence_block = (
+        f"\n\nPRE-FETCHED EVIDENCE (from MCP tools):\n{evidence}"
+        if evidence else ""
+    )
+
     persona = load_persona(_AGENT_ID)
     llm = _build_llm()
 
@@ -250,7 +257,7 @@ def ml_operator_node(state: FleetState) -> dict[str, Any]:
         SystemMessage(content=persona),
         HumanMessage(
             content=(
-                f"REQUEST:\n\n{state.content}{triage_hint}\n\n"
+                f"REQUEST:\n\n{state.content}{triage_hint}{evidence_block}\n\n"
                 "Produce an MLFinding. Prime directive: you cannot crash "
                 "the inference path. Quantitative — VRAM cost, expected "
                 "precision/recall change, $/inference if relevant. Move "

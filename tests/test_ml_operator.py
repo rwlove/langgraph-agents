@@ -8,7 +8,7 @@ post-Spark) must round-trip cleanly.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -106,7 +106,7 @@ def _fake_spark_gated_finding() -> MLFinding:
     )
 
 
-def test_ml_operator_writes_finding_to_vault(temp_vault: Path) -> None:
+async def test_ml_operator_writes_finding_to_vault(temp_vault: Path) -> None:
     state = FleetState(
         task_id="t-ml-001",
         source="zulip",
@@ -117,8 +117,9 @@ def test_ml_operator_writes_finding_to_vault(temp_vault: Path) -> None:
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.ml_operator._build_llm", return_value=_FakeLLM()):
-        result = ml_operator_node(state)
+    with patch("agents.nodes.ml_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.ml_operator.gather_evidence", new=AsyncMock(return_value="")):
+        result = await ml_operator_node(state)
 
     expected_path = temp_vault / "inbox" / "drafts" / "ml-t-ml-001.md"
     assert expected_path.exists()
@@ -138,7 +139,7 @@ def test_ml_operator_writes_finding_to_vault(temp_vault: Path) -> None:
     assert "spark_gated=False" in result["output"]
 
 
-def test_ml_operator_surfaces_spark_gated(temp_vault: Path) -> None:
+async def test_ml_operator_surfaces_spark_gated(temp_vault: Path) -> None:
     state = FleetState(
         task_id="t-ml-002",
         source="text",
@@ -149,8 +150,9 @@ def test_ml_operator_surfaces_spark_gated(temp_vault: Path) -> None:
         def invoke(self, _messages):
             return _fake_spark_gated_finding()
 
-    with patch("agents.nodes.ml_operator._build_llm", return_value=_FakeLLM()):
-        result = ml_operator_node(state)
+    with patch("agents.nodes.ml_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.ml_operator.gather_evidence", new=AsyncMock(return_value="")):
+        result = await ml_operator_node(state)
 
     body = (temp_vault / "inbox" / "drafts" / "ml-t-ml-002.md").read_text()
     assert "spark_gated: True" in body
@@ -230,7 +232,7 @@ def test_ml_operator_persona_loads(temp_vault: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ml_operator_composes_approval_request_for_action(temp_vault: Path) -> None:
+async def test_ml_operator_composes_approval_request_for_action(temp_vault: Path) -> None:
     """A Class-C ML finding handed to errand-runner MUST populate
     state.approval_request + target_agent so the fleet graph can route to
     errand-runner and trigger the interrupt() path."""
@@ -244,8 +246,9 @@ def test_ml_operator_composes_approval_request_for_action(temp_vault: Path) -> N
         def invoke(self, _messages):
             return _fake_safe_finding()
 
-    with patch("agents.nodes.ml_operator._build_llm", return_value=_FakeLLM()):
-        update = ml_operator_node(state)
+    with patch("agents.nodes.ml_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.ml_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await ml_operator_node(state)
 
     assert update["target_agent"] == "errand-runner"
     req = update["approval_request"]
@@ -262,7 +265,7 @@ def test_ml_operator_composes_approval_request_for_action(temp_vault: Path) -> N
     assert "500m" in req.payload_summary
 
 
-def test_ml_operator_skips_approval_for_question(temp_vault: Path) -> None:
+async def test_ml_operator_skips_approval_for_question(temp_vault: Path) -> None:
     """A Class-A (Spark-gated, analysis-only) finding with handoff_target=user
     must NOT set approval_request or target_agent — the existing question/
     research path stays END-only."""
@@ -276,8 +279,9 @@ def test_ml_operator_skips_approval_for_question(temp_vault: Path) -> None:
         def invoke(self, _messages):
             return _fake_spark_gated_finding()
 
-    with patch("agents.nodes.ml_operator._build_llm", return_value=_FakeLLM()):
-        update = ml_operator_node(state)
+    with patch("agents.nodes.ml_operator._build_llm", return_value=_FakeLLM()), \
+         patch("agents.nodes.ml_operator.gather_evidence", new=AsyncMock(return_value="")):
+        update = await ml_operator_node(state)
 
     assert "approval_request" not in update
     assert "target_agent" not in update
