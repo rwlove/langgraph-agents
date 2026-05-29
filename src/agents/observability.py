@@ -622,8 +622,7 @@ def langfuse_callback_handler(agent_id: str | None = None) -> BaseCallbackHandle
             trace_id = UUID(int=int(ULID.from_str(str(task_id)))).hex
         except Exception:
             _LANGFUSE_LOGGER.warning(
-                "langfuse_trace_id_conversion_failed",
-                task_id=task_id,
+                "langfuse_trace_id_conversion_failed task_id=%s", task_id
             )
     trace_context: TraceContext | None = TraceContext(trace_id=trace_id) if trace_id else None
     return LangfuseLangchainCallback(trace_context=trace_context)
