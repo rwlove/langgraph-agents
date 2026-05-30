@@ -176,12 +176,21 @@ class QueueWorker:
         # Per-task contextvars — same shape as /inbox bound when it was
         # synchronous. Per-node binding (agent, ...) happens inside the
         # graph wrapper.
-        structlog.contextvars.bind_contextvars(
-            task_id=task_id,
-            source=envelope.get("source", "test"),
-            user=envelope.get("user", "rob"),
-            data_tier=envelope.get("data_tier", "internal"),
-        )
+        ctx: dict[str, Any] = {
+            "task_id": task_id,
+            "source": envelope.get("source", "test"),
+            "user": envelope.get("user", "rob"),
+            "data_tier": envelope.get("data_tier", "internal"),
+        }
+        # trace_id is minted at ingress (api/inbox._ensure_trace_id); bind
+        # it so every node + worker log line for this task — and the
+        # `app.trace_id` span attribute set in the envelope loop below —
+        # share the ingress id. Omitted for directly-enqueued tasks
+        # (tests, legacy callers) that never went through /inbox.
+        trace_id = envelope.get("trace_id")
+        if trace_id:
+            ctx["trace_id"] = trace_id
+        structlog.contextvars.bind_contextvars(**ctx)
 
         # OTel: the FastAPI auto-span is gone (we're not in /inbox
         # anymore); start a worker-side root span.
@@ -220,7 +229,10 @@ class QueueWorker:
         # signal is the 30-min escalation tier from
         # langgraph-awaiting-user-sweep.ts.
         await post_approval_for_interrupts(
-            self._graph, task_id, content=envelope.get("content") or ""
+            self._graph,
+            task_id,
+            content=envelope.get("content") or "",
+            trace_id=envelope.get("trace_id"),
         )
 
         await self._ack_with_result(task_id, output)
@@ -322,6 +334,7 @@ class QueueWorker:
 
         payload = {
             "task_id": task_id,
+            "trace_id": envelope.get("trace_id") or "",
             "target_agent": target_agent or "",
             "content": envelope.get("content") or "",
             "output": output,

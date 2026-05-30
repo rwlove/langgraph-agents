@@ -22,6 +22,7 @@ companion home-ops PR for the updated daily-digest workflow.
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import Any
 
 import structlog
@@ -95,6 +96,28 @@ class InboxResponse(BaseModel):
     # Poll `/admin/tasks/<id>` for the final output.
     output: str | None = None
     paused_for: dict[str, Any] | None = None
+
+
+def _ensure_trace_id(req: InboxRequest) -> None:
+    """Mint a trace_id at ingress when the envelope omits one.
+
+    HOMELAB-SPEC Layer 5: every task carries a `trace_id` that follows
+    it from ingress through every mode hop. Most callers (Open WebUI,
+    HA voice, Android, Windmill) don't supply one, so we mint it here
+    — the single ingress point — giving the task a stable id for its
+    whole life in the queue, worker, graph, and webhook payloads.
+
+    Prefer the active OTel span's trace_id so structured logs and the
+    OTel trace share one id; fall back to a fresh random 128-bit id
+    when no span is active (tests, non-instrumented call paths).
+    """
+    if req.trace_id is not None:
+        return
+    span_context = trace.get_current_span().get_span_context()
+    if span_context.is_valid:
+        req.trace_id = format(span_context.trace_id, "032x")
+    else:
+        req.trace_id = secrets.token_hex(16)
 
 
 def _annotate_current_span(req: InboxRequest, queue_task_id: str) -> None:
@@ -180,11 +203,13 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
                 status="duplicate",
             )
 
+    _ensure_trace_id(req)
     envelope: dict[str, Any] = req.model_dump(mode="json")
     queue_task_id = await queue.enqueue(envelope)
 
     structlog.contextvars.bind_contextvars(
         task_id=queue_task_id,
+        trace_id=req.trace_id,
         source=req.source,
         user=req.user,
         data_tier=req.data_tier,

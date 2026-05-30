@@ -143,6 +143,44 @@ def test_completion_post_fires_with_full_payload(monkeypatch: pytest.MonkeyPatch
     assert body["duration_s"] == 42.7
 
 
+def test_completion_post_carries_trace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB-SPEC Layer 5: the completion card forwards the task's
+    trace_id so the historian summary span shares the ingress id."""
+    _set_completion_webhook(monkeypatch, "http://windmill.example/completion-post")
+    recorder = _PostRecorder()
+    monkeypatch.setattr("agents.queue.worker.httpx.AsyncClient", recorder)
+
+    snapshot = _FakeSnapshot(values={"target_agent": "homelab-engineer"})
+    worker = _build_worker(_FakeGraph(snapshot))
+
+    asyncio.run(
+        worker._post_completion(
+            "01J-task",
+            {"content": "x", "trace_id": "abc123def456"},
+            "done",
+            1.0,
+        )
+    )
+
+    _url, body, _headers = recorder.calls[0]
+    assert body["trace_id"] == "abc123def456"
+
+
+def test_completion_post_trace_id_empty_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A directly-enqueued task with no trace_id → empty string, not a crash."""
+    _set_completion_webhook(monkeypatch, "http://windmill.example/completion-post")
+    recorder = _PostRecorder()
+    monkeypatch.setattr("agents.queue.worker.httpx.AsyncClient", recorder)
+
+    snapshot = _FakeSnapshot(values={"target_agent": "coder"})
+    worker = _build_worker(_FakeGraph(snapshot))
+
+    asyncio.run(worker._post_completion("01J-task", {"content": "x"}, "done", 1.0))
+
+    _url, body, _headers = recorder.calls[0]
+    assert body["trace_id"] == ""
+
+
 def test_completion_post_silent_when_url_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     """No URL → no POST and no graph state read (avoids unnecessary lock contention)."""
     _set_completion_webhook(monkeypatch, None)
@@ -243,3 +281,45 @@ def test_approval_post_payload_includes_content(monkeypatch: pytest.MonkeyPatch)
     assert body["content"] == "deploy the coder model"
     # Existing shape preserved
     assert body["paused_for"]["approval_request"]["action_class"] == "C"
+
+
+def test_approval_post_payload_includes_trace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB-SPEC Layer 5: the approval card forwards the task's
+    trace_id so the Windmill approval span shares the ingress id."""
+    monkeypatch.setenv("APPROVAL_POST_WEBHOOK_URL", "http://windmill.example/approval-post")
+    get_settings.cache_clear()
+    recorder = _PostRecorder()
+    monkeypatch.setattr("agents.queue.worker.httpx.AsyncClient", recorder)
+
+    approval = {"action_class": "C", "target": "ml-operator.deploy_model"}
+    snapshot = _FakeSnapshot(tasks=[_FakeGraphTask([_FakeInterrupt(approval)])])
+    worker = _build_worker(_FakeGraph(snapshot))
+
+    asyncio.run(
+        post_approval_for_interrupts(
+            worker._graph,
+            "01J-task",
+            content="deploy the coder model",
+            trace_id="trace-xyz-789",
+        )
+    )
+
+    _url, body, _headers = recorder.calls[0]
+    assert body["trace_id"] == "trace-xyz-789"
+
+
+def test_approval_post_trace_id_empty_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Smoke-test caller passes no trace_id → empty string in the payload."""
+    monkeypatch.setenv("APPROVAL_POST_WEBHOOK_URL", "http://windmill.example/approval-post")
+    get_settings.cache_clear()
+    recorder = _PostRecorder()
+    monkeypatch.setattr("agents.queue.worker.httpx.AsyncClient", recorder)
+
+    approval = {"action_class": "A", "target": "errand-runner.noop"}
+    snapshot = _FakeSnapshot(tasks=[_FakeGraphTask([_FakeInterrupt(approval)])])
+    worker = _build_worker(_FakeGraph(snapshot))
+
+    asyncio.run(post_approval_for_interrupts(worker._graph, "01J-task", content="x"))
+
+    _url, body, _headers = recorder.calls[0]
+    assert body["trace_id"] == ""
