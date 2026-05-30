@@ -33,14 +33,19 @@ import logging
 import os
 import socket
 import time
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import httpx
 import structlog
 from opentelemetry import trace
 
-from agents.observability import get_logger
-from agents.queue.approval_post import post_approval_for_interrupts
+from agents.observability import (
+    get_logger,
+    langgraph_awaiting_approval_oldest_age_seconds,
+    langgraph_awaiting_approval_tasks,
+)
+from agents.queue.approval_post import has_pending_approval, post_approval_for_interrupts
 from agents.settings import get_settings
 from agents.state import FleetState
 from agents.tools import pushover
@@ -87,6 +92,9 @@ class QueueWorker:
         # monotonic timestamp of the last TTL sweep; 0.0 forces a sweep on
         # the first loop iteration.
         self._last_sweep = 0.0
+        # Independent throttle for the guardian approval-TTL sweep, so the
+        # two sweeps don't share a clock and starve one another.
+        self._last_approval_sweep = 0.0
         self._worker_id = _worker_id()
         self._stopping = False
 
@@ -96,6 +104,7 @@ class QueueWorker:
         try:
             while not self._stopping:
                 await self._maybe_sweep_expired()
+                await self._maybe_sweep_expired_approvals()
                 try:
                     claim = await self._queue.dequeue(self._worker_id)
                 except Exception as exc:  # pool / DB hiccup
@@ -166,6 +175,77 @@ class QueueWorker:
         except Exception as exc:  # pushover unconfigured / network
             slog.warning("queue_worker_expire_notify_failed", error=str(exc))
 
+    async def _maybe_sweep_expired_approvals(self) -> None:
+        """Run the guardian approval-TTL sweep at most once per interval.
+
+        HOMELAB-SPEC Layer 4 Guardian + Layer 5: a task parked at
+        `awaiting_approval` that outlives its `approval_expires_at`
+        deadline is moved to the DLQ tagged `approval_ttl_expired`. The
+        task does NOT auto-execute — the LangGraph thread is left paused
+        in the checkpointer; only the durable queue row moves. Throttled
+        and error-swallowing for the same reasons as the TTL sweep: the
+        worker must keep draining real work regardless.
+        """
+        now = time.monotonic()
+        if now - self._last_approval_sweep < self._sweep_interval:
+            return
+        self._last_approval_sweep = now
+        try:
+            expired = await self._queue.expire_overdue_approvals()
+        except Exception as exc:  # pool / DB hiccup
+            slog.warning("queue_worker_approval_sweep_error", error=str(exc))
+            return
+        if expired:
+            await self._notify_expired_approvals(expired)
+        await self._refresh_approval_gauges()
+
+    async def _refresh_approval_gauges(self) -> None:
+        """Publish guardian-queue depth + oldest-age to Prometheus.
+
+        Runs after the expiry sweep so the gauges reflect the queue with
+        lapsed rows already reaped. Best-effort: a stats-query failure must
+        not stall the loop, so the gauges simply hold their last value.
+        """
+        try:
+            depth, oldest_age = await self._queue.awaiting_approval_stats()
+        except Exception as exc:  # pool / DB hiccup
+            slog.warning("queue_worker_approval_stats_error", error=str(exc))
+            return
+        langgraph_awaiting_approval_tasks.set(depth)
+        langgraph_awaiting_approval_oldest_age_seconds.set(oldest_age)
+
+    async def _notify_expired_approvals(self, expired: list[TaskClaim]) -> None:
+        """Notify Rob that awaiting-approval tasks lapsed past their TTL.
+
+        Distinct from `_notify_expired`: these tasks DID reach Rob's
+        guardian queue and asked for a verdict — they expired because the
+        verdict never came, not because they timed out before running.
+        Per HOMELAB-SPEC Layer 5 the expiry must surface a summary, never
+        silently drop. Best-effort Pushover (Tier-1 channel); a send
+        failure must not stall the loop — the rows are durably in the DLQ.
+        """
+        count = len(expired)
+        lines: list[str] = []
+        for claim in expired[:10]:
+            intent = str(claim.envelope.get("intent") or claim.envelope.get("content") or "")
+            lines.append(f"• {claim.task_id}: {intent[:80]}")
+        if count > 10:
+            lines.append(f"… and {count - 10} more")
+        message = (
+            f"{count} task(s) awaiting your approval lapsed past their TTL and "
+            f"were moved to the DLQ (they did NOT execute):\n" + "\n".join(lines)
+        )
+        slog.warning("approval_ttl_expired_batch", count=count)
+        try:
+            await asyncio.to_thread(
+                pushover.send,
+                "Approvals expired (TTL)",
+                message,
+                priority=1,
+            )
+        except Exception as exc:  # pushover unconfigured / network
+            slog.warning("queue_worker_approval_expire_notify_failed", error=str(exc))
+
     async def _handle_one(self, claim: TaskClaim) -> None:
         """Process one claim: invoke the graph, ack / nack / dlq."""
         envelope = claim.envelope
@@ -221,19 +301,34 @@ class QueueWorker:
                 return
 
         # Detect approval-interrupt before acking. When a specialist
-        # called interrupt() with an ApprovalRequest payload, the
-        # graph returns with no `output`; the request is exposed via
-        # the checkpointer's interrupts list. POST it to the
-        # configured Windmill webhook so ntfy + Zulip approval cards
-        # fire immediately — without this, the first user-visible
-        # signal is the 30-min escalation tier from
-        # langgraph-awaiting-user-sweep.ts.
-        await post_approval_for_interrupts(
-            self._graph,
-            task_id,
-            content=envelope.get("content") or "",
-            trace_id=envelope.get("trace_id"),
-        )
+        # called interrupt() with an ApprovalRequest payload, the graph
+        # returns with no `output`; the request is exposed via the
+        # checkpointer's interrupts list. Such a task is NOT done — it is
+        # parked waiting on Rob's verdict (HOMELAB-SPEC Layer 4 Guardian).
+        # Acking it `done` here (the historical bug) made the durable
+        # queue lie about a task still alive in the checkpointer.
+        #
+        # `has_pending_approval` is webhook-independent so a deployment
+        # with no approval webhook still parks correctly. It swallows
+        # checkpointer errors (returns False) so the dispatch loop never
+        # crashes on a detection read — a missed park is caught by
+        # langgraph-awaiting-user-sweep.ts at the 30-min escalation tier.
+        if await has_pending_approval(self._graph, task_id):
+            # Fire the Windmill approval webhook so ntfy + Zulip cards
+            # surface immediately (best-effort, webhook-gated internally).
+            await post_approval_for_interrupts(
+                self._graph,
+                task_id,
+                content=envelope.get("content") or "",
+                trace_id=envelope.get("trace_id"),
+            )
+            # Park the durable row at `awaiting_approval` with the Layer 5
+            # guardian TTL. The /approval resume path acks it `done`; the
+            # guardian sweep expires it to the DLQ if Rob never answers.
+            await self._queue.park_for_approval(
+                task_id, self._approval_deadline(envelope)
+            )
+            return
 
         await self._ack_with_result(task_id, output)
 
@@ -366,6 +461,21 @@ class QueueWorker:
                 duration_s=duration_s,
                 target_agent=target_agent,
             )
+
+    @staticmethod
+    def _approval_deadline(envelope: dict[str, Any]) -> datetime:
+        """Compute the guardian-TTL deadline for an awaiting-approval task.
+
+        Honors an explicit `envelope['ttl_seconds']` when present (the
+        task carried its own deadline through the contract); otherwise
+        falls back to the cluster-wide `approval_ttl_seconds` default
+        (24h). Per HOMELAB-SPEC Layer 5 the deadline drives expiry +
+        notify, never auto-execution.
+        """
+        ttl_seconds = envelope.get("ttl_seconds")
+        if not ttl_seconds:
+            ttl_seconds = get_settings().approval_ttl_seconds
+        return datetime.now(UTC) + timedelta(seconds=int(ttl_seconds))
 
     async def _ack_with_result(self, task_id: str, output: str | None) -> None:
         """Mark task done and store the output for `/admin/tasks/<id>` retrieval."""

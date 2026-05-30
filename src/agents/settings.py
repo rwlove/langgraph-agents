@@ -314,6 +314,17 @@ class Settings(BaseSettings):
             "alertmanager uses to call alertmanager-holmesgpt-notify."
         ),
     )
+    approval_ttl_seconds: int = Field(
+        default=86400,
+        ge=1,
+        description=(
+            "HOMELAB-SPEC Layer 5 guardian TTL: how long an approval-gated "
+            "task waits for Rob's verdict before the guardian sweep expires "
+            "it to the DLQ (tagged `approval_ttl_expired`) and notifies him. "
+            "On expiry the task does NOT auto-execute. A task whose envelope "
+            "carries an explicit `ttl_seconds` overrides this default."
+        ),
+    )
 
     # --- completion-post webhook (Stage 2 dogfooding) ---
     # When a task transitions to ``status='done'`` in the queue, the

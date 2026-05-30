@@ -44,7 +44,15 @@ def _wait_for_user(state: FleetState) -> dict[str, Any]:
         "task_id": state.task_id,
         "approval_request": state.approval_request.model_dump() if state.approval_request else None,
     }
-    reaction: dict[str, Any] = interrupt(payload)  # paused here until resumed
+    # A defer is not terminal — re-pause for a fresh verdict rather than
+    # collapsing it into a rejection (`granted=False`). Mirrors the live
+    # interrupt loop in `nodes/errand_runner.py`. This subgraph is not yet
+    # wired into the fleet graph; the loop keeps the two interrupt sites
+    # consistent for when it is.
+    while True:
+        reaction: dict[str, Any] = interrupt(payload)  # paused here until resumed
+        if not reaction.get("deferred"):
+            break
 
     granted = reaction.get("granted", False)
     token = reaction.get("approval_token")

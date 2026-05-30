@@ -44,8 +44,49 @@ async def list_agents() -> list[dict[str, str]]:
     return out
 
 
+async def _list_tasks_by_status(request: Request, status: str) -> list[dict[str, Any]]:
+    """Cheap status-filtered listing straight from `task_queue`.
+
+    No checkpointer scan — a single indexed SELECT. Newest-first by ULID.
+    Returns 503 if the queue substrate isn't wired (pool is None).
+    """
+    pool = request.app.state.queue_pool
+    if pool is None:
+        raise HTTPException(status_code=503, detail="queue substrate not initialized")
+
+    out: list[dict[str, Any]] = []
+    async with pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT id, envelope, status, approval_expires_at, updated_at
+            FROM task_queue
+            WHERE status = %s
+            ORDER BY id DESC
+            """,
+            (status,),
+        )
+        async for row in cur:
+            envelope = row[1] or {}
+            approval_expires_at = row[3]
+            updated_at = row[4]
+            out.append(
+                {
+                    "task_id": row[0],
+                    "queue_status": row[2],
+                    "content": envelope.get("content") or "",
+                    "source": envelope.get("source") or "",
+                    "user": envelope.get("user") or "",
+                    "approval_expires_at": (
+                        approval_expires_at.isoformat() if approval_expires_at else None
+                    ),
+                    "updated_at": updated_at.isoformat() if updated_at else None,
+                }
+            )
+    return out
+
+
 @router.get("/tasks")
-async def list_tasks(request: Request) -> list[dict[str, Any]]:
+async def list_tasks(request: Request, status: str | None = None) -> list[dict[str, Any]]:
     """List all tasks the checkpointer knows about.
 
     Used by the awaiting-user-sweep Windmill script to find paused
@@ -53,6 +94,15 @@ async def list_tasks(request: Request) -> list[dict[str, Any]]:
     its own checkpointer instance (own pool, own `asyncio.Lock`) so
     the dispatch path's hung calls can't block us. See `main.py`
     lifespan comment for that isolation.
+
+    `?status=<queue-status>` short-circuits to a cheap, status-indexed
+    `task_queue` query and skips the checkpointer scan entirely. This
+    is the guardian's read surface — `?status=awaiting_approval` lists
+    only the tasks parked for Rob's verdict (backed by the
+    `idx_task_queue_awaiting` partial index), carrying their
+    `approval_expires_at` so the operator can see which are closest to
+    lapsing. The unfiltered call keeps the full checkpointer-backed
+    listing below.
 
     Implementation is two-phase to avoid SELF-deadlocking on the
     admin saver's own lock: `AsyncPostgresSaver._cursor` does
@@ -65,6 +115,9 @@ async def list_tasks(request: Request) -> list[dict[str, Any]]:
     exits), then call `aget_state` per thread (each one takes and
     releases the lock cleanly).
     """
+    if status is not None:
+        return await _list_tasks_by_status(request, status)
+
     graph = request.app.state.admin_graph
     if graph is None:
         raise HTTPException(status_code=503, detail="admin graph not initialized")

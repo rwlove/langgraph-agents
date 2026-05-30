@@ -162,6 +162,23 @@ langgraph_paused_threads = Gauge(
     ("is_stale",),
 )
 
+# The guardian approval queue: tasks parked at `awaiting_approval` waiting
+# for Rob's verdict (HOMELAB-SPEC Layer 4 Guardian + Layer 5 TTL). The
+# queue worker refreshes these every approval sweep from a cheap aggregate
+# over the `idx_task_queue_awaiting` partial index.
+#
+# Operator alert: oldest_age climbing toward the 24h approval TTL means a
+# destructive action is about to lapse to the DLQ unactioned — Rob should
+# answer it before the guardian sweep reaps it.
+langgraph_awaiting_approval_tasks = Gauge(
+    "langgraph_awaiting_approval_tasks",
+    "Number of tasks currently parked in the guardian approval queue.",
+)
+langgraph_awaiting_approval_oldest_age_seconds = Gauge(
+    "langgraph_awaiting_approval_oldest_age_seconds",
+    "Age of the oldest task parked awaiting approval, in seconds (0 when none).",
+)
+
 
 # ---------------------------------------------------------------------------
 # Structlog setup. Idempotent; calling configure_structlog() twice is safe.

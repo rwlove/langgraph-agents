@@ -10,6 +10,11 @@ Lifecycle of one task:
     dequeue(worker_id)           → status=claimed, visibility_timeout_at=now()+t
     ack(task_id)                 → status=done (or row deleted; see DELETE_ON_ACK)
     OR
+    park_for_approval(id, exp)   → status=awaiting_approval (paused on an
+                                   ApprovalRequest interrupt; Layer 4 Guardian)
+        resolve_approval(id, out)→ status=done (verdict landed via /approval)
+        OR expire_overdue_approvals() → row → task_dlq (guardian TTL lapsed)
+    OR
     nack(task_id)                → status=pending, attempts++ (worker requeues)
     OR
     to_dlq(task_id, error)       → row moved to task_dlq
@@ -188,6 +193,64 @@ class TaskQueue:
             )
         slog.info("task_acked", task_id=task_id)
 
+    async def park_for_approval(self, task_id: str, approval_expires_at: datetime) -> None:
+        """Park a claimed task at `awaiting_approval` instead of acking done.
+
+        Called by the worker when the graph paused on an ApprovalRequest
+        interrupt (HOMELAB-SPEC Layer 4 Guardian). Before this, such a
+        task was acked `done` — the durable row lied about a task that
+        was actually waiting on Rob in the checkpointer. `approval_expires_at`
+        carries the Layer 5 guardian TTL; `expire_overdue_approvals`
+        enforces it.
+
+        Idempotent under at-least-once resume: re-parking an already-parked
+        row just refreshes `approval_expires_at` (used by the defer path).
+        """
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                UPDATE task_queue
+                SET status = 'awaiting_approval',
+                    approval_expires_at = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (approval_expires_at, task_id),
+            )
+        slog.info(
+            "task_awaiting_approval",
+            task_id=task_id,
+            approval_expires_at=approval_expires_at.isoformat(),
+        )
+
+    async def resolve_approval(self, task_id: str, output: str | None) -> None:
+        """Ack an awaiting-approval task `done` once the verdict resolves.
+
+        Called by the `/approval` resume path (api/approval.py) after the
+        graph runs to completion on approve/reject. Clears
+        `approval_expires_at` so a resolved row is never swept.
+
+        No-op-safe: if the row already left `awaiting_approval` (e.g. the
+        guardian sweep moved it to the DLQ on TTL expiry before a late
+        resume landed), the `WHERE` clause matches nothing and the late
+        resume is harmless.
+        """
+        result_payload = json.dumps({"output": output}) if output is not None else None
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                UPDATE task_queue
+                SET status = 'done',
+                    result = %s::jsonb,
+                    approval_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND status = 'awaiting_approval'
+                """,
+                (result_payload, task_id),
+            )
+        slog.info("task_approval_resolved", task_id=task_id, has_output=output is not None)
+
     async def nack(self, task_id: str) -> None:
         """Return a claim to pending. Worker requeues without DLQ.
 
@@ -269,6 +332,73 @@ class TaskQueue:
         for claim in expired:
             slog.warning("task_ttl_expired", task_id=claim.task_id)
         return expired
+
+    async def expire_overdue_approvals(self) -> list[TaskClaim]:
+        """Expire awaiting-approval tasks past their guardian TTL.
+
+        Per HOMELAB-SPEC Layer 5 Guardian: "On expiry: the task does not
+        auto-execute; it expires and notifies Rob with a summary." This is
+        the approval-queue analogue of `expire_overdue` — it sweeps rows
+        parked at `awaiting_approval` whose `approval_expires_at` passed,
+        moving them to the DLQ tagged `approval_ttl_expired` so Rob sees a
+        lapsed approval rather than it silently vanishing.
+
+        The checkpointer thread is deliberately left paused; the
+        durable-queue row is the source of truth, and `resolve_approval`
+        is a no-op on the now-absent row, so a late `/approval` resume
+        after expiry can't execute the action. Atomic CTE — DELETE + DLQ
+        INSERT commit together.
+
+        Returns the expired claims for the operator summary. Empty list
+        when nothing was overdue.
+        """
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                """
+                WITH overdue AS (
+                    DELETE FROM task_queue
+                    WHERE status = 'awaiting_approval'
+                      AND approval_expires_at IS NOT NULL
+                      AND approval_expires_at < NOW()
+                    RETURNING id, envelope, attempts
+                )
+                INSERT INTO task_dlq (id, envelope, attempts, last_error)
+                SELECT id, envelope, attempts, 'approval_ttl_expired' FROM overdue
+                RETURNING id, envelope, attempts
+                """
+            )
+            rows = await cur.fetchall()
+
+        expired = [TaskClaim(task_id=r[0], envelope=r[1], attempts=r[2]) for r in rows]
+        for claim in expired:
+            slog.warning("task_approval_ttl_expired", task_id=claim.task_id)
+        return expired
+
+    async def awaiting_approval_stats(self) -> tuple[int, float]:
+        """Return (depth, oldest_age_seconds) for the awaiting-approval queue.
+
+        `depth` is the count of rows parked at `awaiting_approval`.
+        `oldest_age_seconds` is the wall-clock age of the oldest such row
+        (by `updated_at`, the moment it was parked), 0.0 when none are
+        parked. Backed by the `idx_task_queue_awaiting` partial index, so
+        this is a cheap aggregate the worker can run every approval sweep
+        to feed the queue-depth/age gauges.
+        """
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(updated_at))), 0)
+                FROM task_queue
+                WHERE status = 'awaiting_approval'
+                """
+            )
+            row = await cur.fetchone()
+
+        if row is None:
+            return (0, 0.0)
+        return (int(row[0]), float(row[1]))
 
     async def attempts_remaining(self, claim: TaskClaim) -> int:
         """Return retries remaining per `envelope.retry_policy.max_attempts`,
