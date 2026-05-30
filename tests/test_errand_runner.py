@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from agents.nodes.errand_runner import errand_runner_node
+from agents.nodes.errand_runner import _looks_like_ns_delete, errand_runner_node
 from agents.settings import get_settings
 from agents.state import ApprovalRequest, FleetState
 
@@ -532,3 +532,220 @@ def test_smoke_refuses_when_not_in_allowlist(
 
     result = errand_runner_node(state)
     assert "not in allowlist" in result["output"]
+
+
+# ---------------------------------------------------------------------------
+# Two-person namespace-delete gate (HOMELAB-SPEC Layer 5).
+#
+# A namespace deletion needs Rob's approval PLUS an explicit second
+# confirmation. The gate fires whenever the request carries
+# `requires_two_person=True` OR the executor's own classifier
+# (`_looks_like_ns_delete`) reads the action as a namespace delete — a
+# forgotten flag must never downgrade the gate (fail-safe). Only a second
+# grant proceeds to execution.
+#
+# These drive the gate through the same interrupt/resume machinery as the
+# first approval: invoke → pause (first gate) → resume grant → pause
+# (second gate) → resume grant → execute.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("target", "summary"),
+    [
+        ("ha-mcp.call_service", "delete namespace foo"),
+        ("ha-mcp.call_service", "remove the media namespace"),
+        ("kubectl-mcp.delete_namespace", "tear down old app"),
+        ("ha-mcp.call_service", "DELETE NAMESPACE media"),  # case-insensitive
+        ("ha-mcp.call_service", "destroy namespaces in bulk"),
+    ],
+)
+def test_looks_like_ns_delete_true(target: str, summary: str) -> None:
+    assert _looks_like_ns_delete(target, summary) is True
+
+
+@pytest.mark.parametrize(
+    ("target", "summary"),
+    [
+        ("ha-mcp.call_service", "delete pod foo"),  # delete, but not namespace
+        ("ha-mcp.call_service", "remove a PVC"),
+        ("ha-mcp.call_service", "turn on porch light"),  # neither signal
+        ("ha-mcp.call_service", "list namespaces"),  # namespace, but not delete
+        ("ha-mcp.call_service", "create namespace foo"),  # namespace, no delete verb
+    ],
+)
+def test_looks_like_ns_delete_false(target: str, summary: str) -> None:
+    assert _looks_like_ns_delete(target, summary) is False
+
+
+def test_two_person_flag_first_grant_repauses_then_executes(
+    temp_vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """requires_two_person=True: a single grant is NOT enough. The first grant
+    re-pauses on a distinct second-confirmation interrupt (tagged
+    confirmation_stage=two_person), and only the second grant executes."""
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
+    get_settings.cache_clear()
+
+    graph = _build_errand_only_graph()
+    config = {"configurable": {"thread_id": "t-2p-1"}}
+    token = _signed_token("t-2p-1", "C", "ha-mcp", "call_service", "test-secret")
+
+    initial = FleetState(
+        task_id="t-2p-1",
+        source="test",
+        content="x",
+        approval_request=ApprovalRequest(
+            action_class="C",
+            target="ha-mcp.call_service",
+            payload_summary="turn on porch light",  # innocuous; flag forces the gate
+            undo_path="ha-mcp.call_service light.turn_off",
+            proposed_by="smart-home-operator",
+            requires_two_person=True,
+        ),
+    )
+
+    # First gate.
+    paused = graph.invoke(initial, config=config)
+    assert "__interrupt__" in paused
+
+    # First grant → the two-person gate fires, re-pausing on a distinct prompt.
+    grant1 = {"granted": True, "deferred": False, "approval_token": token, "actor": "rob"}
+    with patch("httpx.Client.post", side_effect=AssertionError("must not call MCP")):
+        repaused = graph.invoke(Command(resume=grant1), config=config)
+
+    assert "__interrupt__" in repaused
+    iv = repaused["__interrupt__"][0].value
+    assert iv["confirmation_stage"] == "two_person"
+    assert "SECOND CONFIRMATION REQUIRED" in iv["warning"]
+    # No terminal output yet — still parked.
+    assert repaused.get("output") is None
+
+    # Second grant → executes.
+    grant2 = {"granted": True, "deferred": False, "approval_token": token, "actor": "rob"}
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"status": "ok"}
+    fake_response.text = '{"status":"ok"}'
+    with patch("httpx.Client.post", return_value=fake_response):
+        final = graph.invoke(Command(resume=grant2), config=config)
+
+    assert "executed ha-mcp.call_service" in final["output"]
+
+
+def test_two_person_second_confirmation_denied_refuses(
+    temp_vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First grant, second confirmation denied → refusal, no MCP call."""
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
+    get_settings.cache_clear()
+
+    graph = _build_errand_only_graph()
+    config = {"configurable": {"thread_id": "t-2p-2"}}
+    token = _signed_token("t-2p-2", "C", "ha-mcp", "call_service", "test-secret")
+
+    initial = FleetState(
+        task_id="t-2p-2",
+        source="test",
+        content="x",
+        approval_request=ApprovalRequest(
+            action_class="C",
+            target="ha-mcp.call_service",
+            payload_summary="turn on porch light",
+            undo_path="ha-mcp.call_service light.turn_off",
+            proposed_by="smart-home-operator",
+            requires_two_person=True,
+        ),
+    )
+
+    paused = graph.invoke(initial, config=config)
+    assert "__interrupt__" in paused
+
+    grant1 = {"granted": True, "deferred": False, "approval_token": token, "actor": "rob"}
+    with patch("httpx.Client.post", side_effect=AssertionError("must not call MCP")):
+        repaused = graph.invoke(Command(resume=grant1), config=config)
+    assert "__interrupt__" in repaused
+
+    deny2 = {"granted": False, "deferred": False, "approval_token": "", "actor": "rob"}
+    with patch("httpx.Client.post", side_effect=AssertionError("must not call MCP")):
+        final = graph.invoke(Command(resume=deny2), config=config)
+
+    assert "second confirmation denied" in final["output"]
+
+
+def test_two_person_classifier_triggers_without_flag(
+    temp_vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-safe: even with requires_two_person unset, a payload that reads as a
+    namespace delete triggers the second confirmation via the classifier."""
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
+    get_settings.cache_clear()
+
+    graph = _build_errand_only_graph()
+    config = {"configurable": {"thread_id": "t-2p-3"}}
+    token = _signed_token("t-2p-3", "C", "ha-mcp", "call_service", "test-secret")
+
+    initial = FleetState(
+        task_id="t-2p-3",
+        source="test",
+        content="x",
+        approval_request=ApprovalRequest(
+            action_class="C",
+            target="ha-mcp.call_service",
+            payload_summary="delete namespace media",  # classifier should fire
+            undo_path="ha-mcp.call_service",
+            proposed_by="homelab-engineer",
+            # requires_two_person intentionally unset (defaults False)
+        ),
+    )
+
+    paused = graph.invoke(initial, config=config)
+    assert "__interrupt__" in paused
+
+    grant1 = {"granted": True, "deferred": False, "approval_token": token, "actor": "rob"}
+    with patch("httpx.Client.post", side_effect=AssertionError("must not call MCP")):
+        repaused = graph.invoke(Command(resume=grant1), config=config)
+
+    # Second gate fired despite the flag being unset.
+    assert "__interrupt__" in repaused
+    assert repaused["__interrupt__"][0].value["confirmation_stage"] == "two_person"
+
+
+def test_non_namespace_delete_executes_on_single_grant(
+    temp_vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: an ordinary delete (a pod, not a namespace) must NOT trip the
+    two-person gate — a single grant executes."""
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
+    get_settings.cache_clear()
+
+    graph = _build_errand_only_graph()
+    config = {"configurable": {"thread_id": "t-2p-4"}}
+    token = _signed_token("t-2p-4", "C", "ha-mcp", "call_service", "test-secret")
+
+    initial = FleetState(
+        task_id="t-2p-4",
+        source="test",
+        content="x",
+        approval_request=ApprovalRequest(
+            action_class="C",
+            target="ha-mcp.call_service",
+            payload_summary="delete pod foo",  # delete, but not a namespace
+            undo_path="ha-mcp.call_service",
+            proposed_by="homelab-engineer",
+        ),
+    )
+
+    paused = graph.invoke(initial, config=config)
+    assert "__interrupt__" in paused
+
+    grant1 = {"granted": True, "deferred": False, "approval_token": token, "actor": "rob"}
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"status": "ok"}
+    fake_response.text = '{"status":"ok"}'
+    with patch("httpx.Client.post", return_value=fake_response):
+        final = graph.invoke(Command(resume=grant1), config=config)
+
+    # Executed on the FIRST grant — no second interrupt.
+    assert "executed ha-mcp.call_service" in final["output"]

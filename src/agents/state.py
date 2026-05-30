@@ -158,6 +158,11 @@ class ApprovalRequest(BaseModel):
     undo_path: str | None = None
     proposed_by: AgentId
     cost_estimate_usd: float = 0.0
+    # HOMELAB-SPEC Layer 5 blast-radius: namespace deletion needs Rob's
+    # approval PLUS an explicit second confirmation. A composer may set this
+    # proactively; errand-runner also force-enables it via a fail-safe
+    # classifier, so a forgotten flag can't downgrade the gate.
+    requires_two_person: bool = False
 
 
 class ActivityLogEntry(BaseModel):

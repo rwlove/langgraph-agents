@@ -42,6 +42,32 @@ _SMOKE_SERVER = "smoke"
 
 Outcome = Literal["executed", "rejected", "preflight-failed", "no-approval", "deferred"]
 
+# Two-person gate (HOMELAB-SPEC Layer 5): a namespace deletion is the
+# highest-blast-radius action this node can run, so it needs Rob's approval
+# PLUS an explicit second confirmation — never a single tap. We can't trust a
+# composer to flag it (today every operator emits `kubectl_apply`; nothing
+# proposes a delete at all), so the executor classifies independently and
+# fails safe: if it smells like a namespace delete, the second gate fires
+# regardless of the request's `requires_two_person` flag.
+_DELETE_SIGNALS = ("delete", "remove", "destroy", "drop")
+_NAMESPACE_SIGNALS = ("namespace", "namespaces")
+
+
+def _looks_like_ns_delete(target: str, summary: str) -> bool:
+    """Conservative namespace-delete classifier for the two-person gate.
+
+    Fires only when BOTH a delete-verb signal and a namespace-scope signal are
+    present — so ordinary deletes (a pod, a PVC) don't trip it, but anything
+    that reads as "delete a namespace" does. Matches on the MCP target
+    (`server.method`) and the human payload summary, lower-cased. Deliberately
+    err toward over-detection: a false positive costs one extra confirmation
+    tap; a false negative deletes a namespace on a single approval.
+    """
+    haystack = f"{target} {summary}".lower()
+    has_delete = any(sig in haystack for sig in _DELETE_SIGNALS)
+    has_namespace = any(sig in haystack for sig in _NAMESPACE_SIGNALS)
+    return has_delete and has_namespace
+
 
 class ExecutionResult(BaseModel):
     outcome: Outcome
@@ -282,6 +308,42 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911, P
             reason="approval not granted; refusing.",
         )
         return {"output": f"errand-runner: {result.reason}"}
+
+    # Two-person gate. A namespace deletion needs a SECOND explicit
+    # confirmation on top of the grant above (HOMELAB-SPEC Layer 5). Fail
+    # safe: fire whenever the request carries the flag OR the executor's own
+    # classifier reads the action as a namespace delete — a forgotten flag
+    # must not downgrade the gate. The second `interrupt()` is a distinct
+    # prompt (the resume reconciler in api/approval.py re-parks the task with
+    # a fresh TTL while we wait), and a defer at this stage keeps the task
+    # parked exactly like the first gate. Only a second grant proceeds.
+    two_person = req.requires_two_person or _looks_like_ns_delete(
+        req.target, req.payload_summary
+    )
+    if two_person:
+        confirm_payload = {
+            **req.model_dump(),
+            "confirmation_stage": "two_person",
+            "warning": (
+                "SECOND CONFIRMATION REQUIRED — this is a namespace deletion "
+                "(irreversible, cluster-wide blast radius). Approve again to "
+                "execute, or reject to abort."
+            ),
+        }
+        while True:
+            confirm: dict[str, Any] = interrupt(confirm_payload)
+            if not confirm.get("deferred"):
+                break
+        if not bool(confirm.get("granted", False)):
+            return {
+                "output": (
+                    "errand-runner: second confirmation denied for "
+                    f"namespace-delete '{req.target}'; refusing."
+                ),
+            }
+        # Prefer the second grant's token (most recent authorization); fall
+        # back to the first if the confirm verdict omitted one.
+        approval_token = confirm.get("approval_token") or approval_token
 
     # Decompose target into server + method (specialist proposes "server.method")
     if "." not in req.target:
