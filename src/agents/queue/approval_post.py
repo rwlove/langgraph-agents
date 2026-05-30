@@ -35,6 +35,8 @@ async def post_approval_for_interrupts(
     graph: Any,
     task_id: str,
     content: str = "",
+    *,
+    trace_id: str | None = None,
 ) -> None:
     """POST an ApprovalRequest to the Windmill approval-post webhook
     when ``graph`` has paused at an ``interrupt()`` call on ``task_id``.
@@ -53,6 +55,9 @@ async def post_approval_for_interrupts(
       content: Originating prompt — included in the webhook payload so
         the Zulip DM card can show "You asked: ...". May be empty for
         synthetic invocations (smoke tests).
+      trace_id: The task's HOMELAB-SPEC Layer 5 trace_id, forwarded so
+        the approval card and downstream Windmill spans share the
+        task's ingress id. None for synthetic invocations.
     """
     settings = get_settings()
     webhook_url = settings.approval_post_webhook_url
@@ -90,6 +95,7 @@ async def post_approval_for_interrupts(
     # extra field; new ones use it.
     payload = {
         "task_id": task_id,
+        "trace_id": trace_id or "",
         "paused_for": {"approval_request": approval_request},
         "content": content or "",
     }
