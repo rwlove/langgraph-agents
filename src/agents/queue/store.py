@@ -149,8 +149,14 @@ class TaskQueue:
                     updated_at = NOW()
                 WHERE id = (
                     SELECT id FROM task_queue
-                    WHERE status = 'pending'
-                       OR (status = 'claimed' AND visibility_timeout_at < NOW())
+                    WHERE (
+                        status = 'pending'
+                        OR (status = 'claimed' AND visibility_timeout_at < NOW())
+                    )
+                    -- TTL guard: never claim a task past its deadline. Per
+                    -- HOMELAB-SPEC Layer 5 an expired task must NOT auto-
+                    -- execute; the sweeper (`expire_overdue`) terminates it.
+                    AND (ttl_expires_at IS NULL OR ttl_expires_at > NOW())
                     ORDER BY created_at
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1
@@ -222,6 +228,47 @@ class TaskQueue:
                 (task_id, error),
             )
         slog.warning("task_to_dlq", task_id=task_id, error=error[:200])
+
+    async def expire_overdue(self) -> list[TaskClaim]:
+        """Terminate tasks past their TTL — they do NOT auto-execute.
+
+        Per HOMELAB-SPEC Layer 5: "On expiry: the task does not auto-
+        execute; it expires and notifies Rob with a summary." This is
+        the enforcement half — `dequeue`'s TTL guard ensures an expired
+        task is never claimed, and this sweep moves the dead rows to the
+        DLQ (the 4.M3 operator-review surface) tagged `ttl_expired`, so
+        Rob sees *why* a task never ran rather than it silently
+        vanishing.
+
+        Catches both never-claimed (`pending`) and stuck-claim
+        (`claimed`, worker vanished mid-flight and the visibility timeout
+        outlived the TTL) rows. Atomic CTE — the DELETE + DLQ INSERT
+        commit together, so a task is never lost between tables.
+
+        Returns the expired claims so the caller can build the operator
+        summary. Empty list when nothing was overdue.
+        """
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                """
+                WITH overdue AS (
+                    DELETE FROM task_queue
+                    WHERE status IN ('pending', 'claimed')
+                      AND ttl_expires_at IS NOT NULL
+                      AND ttl_expires_at < NOW()
+                    RETURNING id, envelope, attempts
+                )
+                INSERT INTO task_dlq (id, envelope, attempts, last_error)
+                SELECT id, envelope, attempts, 'ttl_expired' FROM overdue
+                RETURNING id, envelope, attempts
+                """
+            )
+            rows = await cur.fetchall()
+
+        expired = [TaskClaim(task_id=r[0], envelope=r[1], attempts=r[2]) for r in rows]
+        for claim in expired:
+            slog.warning("task_ttl_expired", task_id=claim.task_id)
+        return expired
 
     async def attempts_remaining(self, claim: TaskClaim) -> int:
         """Return retries remaining per `envelope.retry_policy.max_attempts`,
