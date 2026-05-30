@@ -446,3 +446,85 @@ def test_costs_today_tolerates_malformed_log(temp_vault: Path) -> None:
         r = client.get("/admin/costs/today")
         # The endpoint catches the ValueError and returns zeros (graceful degrade)
         assert r.status_code == 200
+
+
+class _AsyncRowCursor:
+    """Minimal async cursor: `await execute(...)`, then `async for row`."""
+
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self._rows = rows
+        self.execute = AsyncMock()
+
+    async def __aenter__(self) -> _AsyncRowCursor:
+        return self
+
+    async def __aexit__(self, *_a: Any) -> None:
+        return None
+
+    def __aiter__(self) -> AsyncIterator[tuple[Any, ...]]:
+        async def _gen() -> AsyncIterator[tuple[Any, ...]]:
+            for row in self._rows:
+                yield row
+
+        return _gen()
+
+
+def _pool_yielding(rows: list[tuple[Any, ...]]) -> tuple[MagicMock, _AsyncRowCursor]:
+    cur = _AsyncRowCursor(rows)
+    conn = MagicMock()
+    conn.cursor = MagicMock(return_value=cur)
+    conn_ctx = MagicMock()
+    conn_ctx.__aenter__ = AsyncMock(return_value=conn)
+    conn_ctx.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.connection = MagicMock(return_value=conn_ctx)
+    return pool, cur
+
+
+def test_list_tasks_status_filter_queries_queue_directly(temp_vault: Path) -> None:
+    """`?status=awaiting_approval` reads task_queue, NOT the checkpointer."""
+    deadline = datetime.now(UTC) + timedelta(hours=24)
+    parked = datetime.now(UTC)
+    rows = [
+        (
+            "01J-aaa",
+            {"content": "delete namespace foo", "source": "android", "user": "rob"},
+            "awaiting_approval",
+            deadline,
+            parked,
+        ),
+    ]
+    pool, cur = _pool_yielding(rows)
+
+    app = _make_app_with_graph(temp_vault)
+    # admin_graph MUST NOT be touched on the status path.
+    app.state.admin_graph = MagicMock(
+        checkpointer=MagicMock(
+            alist=MagicMock(side_effect=AssertionError("status path must not scan checkpointer"))
+        )
+    )
+    app.state.queue_pool = pool
+
+    with TestClient(app) as client:
+        r = client.get("/admin/tasks", params={"status": "awaiting_approval"})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["task_id"] == "01J-aaa"
+    assert body[0]["queue_status"] == "awaiting_approval"
+    assert body[0]["content"] == "delete namespace foo"
+    assert body[0]["approval_expires_at"] == deadline.isoformat()
+
+    _sql, params = cur.execute.await_args.args
+    assert "WHERE status = %s" in _sql
+    assert params == ("awaiting_approval",)
+
+
+def test_list_tasks_status_filter_503_when_queue_unwired(temp_vault: Path) -> None:
+    """No queue pool → 503, not a 500."""
+    app = _make_app_with_graph(temp_vault)
+    app.state.queue_pool = None
+    with TestClient(app) as client:
+        r = client.get("/admin/tasks", params={"status": "awaiting_approval"})
+    assert r.status_code == 503

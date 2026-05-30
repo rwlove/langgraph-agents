@@ -31,6 +31,45 @@ logger = logging.getLogger(__name__)
 slog = get_logger("queue.approval_post")
 
 
+def _find_approval_request(snapshot: Any) -> dict[str, Any] | None:
+    """Return the first ApprovalRequest-shaped interrupt in a state snapshot.
+
+    An ApprovalRequest is a dict carrying ``action_class`` — the schema
+    field that distinguishes it from any other interrupt payload that may
+    appear in the future. Returns ``None`` when the graph isn't paused on
+    an approval.
+    """
+    for graph_task in snapshot.tasks:
+        for it in graph_task.interrupts:
+            if isinstance(it.value, dict) and "action_class" in it.value:
+                return dict(it.value)
+    return None
+
+
+async def has_pending_approval(graph: Any, task_id: str) -> bool:
+    """True when ``task_id`` is paused on an ApprovalRequest interrupt.
+
+    The queue worker calls this to decide whether to park the task at
+    ``status='awaiting_approval'`` instead of acking it ``done``. Unlike
+    ``post_approval_for_interrupts`` this is NOT gated on the webhook URL
+    — a deployment with no approval webhook configured must still park
+    paused tasks correctly rather than marking them done.
+
+    Best-effort: on any checkpointer error this returns ``False`` so the
+    worker falls through to its existing ack path. The dispatch loop must
+    never crash on a detection read (ml-operator prime directive); a
+    missed park is caught by ``langgraph-awaiting-user-sweep.ts`` at the
+    30-min escalation tier.
+    """
+    config: Any = {"configurable": {"thread_id": task_id}}
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception:
+        logger.exception("has_pending_approval: aget_state failed task=%s", task_id)
+        return False
+    return _find_approval_request(snapshot) is not None
+
+
 async def post_approval_for_interrupts(
     graph: Any,
     task_id: str,
@@ -71,18 +110,10 @@ async def post_approval_for_interrupts(
         logger.exception("approval-post: aget_state failed task=%s", task_id)
         return
 
-    # Collect interrupt values across tasks; an ApprovalRequest is a
-    # dict carrying `action_class` (the schema field that distinguishes
-    # it from any other interrupt payload that may appear in the future).
-    approval_request: dict[str, Any] | None = None
-    for graph_task in snapshot.tasks:
-        for it in graph_task.interrupts:
-            if isinstance(it.value, dict) and "action_class" in it.value:
-                approval_request = dict(it.value)
-                break
-        if approval_request is not None:
-            break
-
+    # An ApprovalRequest is a dict carrying `action_class` (the schema
+    # field that distinguishes it from any other interrupt payload that
+    # may appear in the future).
+    approval_request = _find_approval_request(snapshot)
     if approval_request is None:
         return
 

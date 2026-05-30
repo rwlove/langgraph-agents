@@ -8,6 +8,7 @@ LangGraph workflow resumes via ``Command(resume=...)``.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import structlog
@@ -16,6 +17,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from agents.observability import get_logger
+from agents.settings import get_settings
 
 router = APIRouter(prefix="", tags=["approval"])
 slog = get_logger("api.approval")
@@ -94,6 +96,37 @@ async def post_approval(req: ApprovalRequest, request: Request) -> ApprovalRespo
     final = await graph.ainvoke(Command(resume=resume_value), config=config)
 
     output = final.get("output")
+
+    # Reconcile the durable queue row with what the graph just did. The
+    # worker parked this task at `awaiting_approval` (queue/worker.py) when
+    # it first hit the interrupt; the queue still believes it's parked.
+    # Branch on the POST-resume graph state, not on `req.reaction`: a defer
+    # re-interrupts (graphs/approval.py), so the graph is paused again and
+    # we re-park with a fresh deadline; approve/reject run to a terminal
+    # state, so we ack `done`.
+    #
+    # Smoke tasks (`smoke-` prefix) never entered the durable queue, and a
+    # queue-disabled deployment has `task_queue is None` — both skip
+    # reconciliation. `resolve_approval` is itself no-op-safe (it only acts
+    # on rows still `awaiting_approval`), so a row the guardian sweep already
+    # expired to the DLQ can't be resurrected here.
+    queue = getattr(request.app.state, "task_queue", None)
+    if queue is not None and not req.task_id.startswith("smoke-"):
+        post_resume = await graph.aget_state(config)
+        still_paused = bool(post_resume.tasks and post_resume.tasks[0].interrupts)
+        if still_paused:
+            deadline = datetime.now(UTC) + timedelta(
+                seconds=get_settings().approval_ttl_seconds
+            )
+            await queue.park_for_approval(req.task_id, deadline)
+            slog.info("approval_resumed_reparked")
+            return ApprovalResponse(
+                task_id=req.task_id,
+                status="resumed",
+                output=output,
+            )
+        await queue.resolve_approval(req.task_id, output)
+
     slog.info("approval_resumed_complete", has_output=output is not None)
 
     return ApprovalResponse(

@@ -209,7 +209,7 @@ def _run_smoke(
     return {"output": result.model_dump_json()}
 
 
-def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
+def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911, PLR0912
     """Verify + execute a proposed MCP-write action.
 
     Required state fields:
@@ -255,18 +255,21 @@ def errand_runner_node(state: FleetState) -> dict[str, Any]:  # noqa: PLR0911
     granted: bool
     approval_token: str | None
     if state.approval_granted is None:
-        verdict: dict[str, Any] = interrupt(req.model_dump())
         # Resume payload shape (api/approval.py post_approval):
         #   {granted: bool, deferred: bool, approval_token: str, actor: str}
-        if verdict.get("deferred"):
-            result = ExecutionResult(
-                outcome="deferred",
-                reason=(
-                    f"deferred by {verdict.get('actor', 'unknown')}; "
-                    "supervisor may re-route or escalate."
-                ),
-            )
-            return {"output": f"errand-runner: {result.reason}"}
+        #
+        # A defer is NOT a terminal verdict — per HOMELAB-SPEC Layer 4 the
+        # task stays parked at `awaiting_approval` waiting on Rob, it does
+        # not auto-execute and it does not complete. So on a defer we loop
+        # and `interrupt()` again, re-pausing for a fresh verdict. LangGraph
+        # replays the node from the top on each resume and feeds the stored
+        # resume values to the interrupt calls in order, so a sequence of
+        # defers followed by an approve resolves correctly. The queue worker
+        # re-parks with a fresh TTL on each defer (api/approval.py).
+        while True:
+            verdict: dict[str, Any] = interrupt(req.model_dump())
+            if not verdict.get("deferred"):
+                break
         granted = bool(verdict.get("granted", False))
         approval_token = verdict.get("approval_token")
     else:

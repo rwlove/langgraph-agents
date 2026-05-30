@@ -147,6 +147,60 @@ def test_expire_overdue_routes_to_dlq_atomically() -> None:
     assert "status IN ('pending', 'claimed')" in src
 
 
+def test_migration_004_approval_queue_present() -> None:
+    """The guardian-approval migration ships in-package."""
+    migrations = resources.files("agents.queue.migrations")
+    files = [f.name for f in migrations.iterdir() if f.name.endswith(".sql")]
+    assert "004_approval_queue.sql" in files
+
+
+def test_migration_004_idempotent_marks() -> None:
+    """The approval migration's ADD COLUMN + CREATE INDEX must be IF NOT
+    EXISTS so re-running on every startup is a no-op."""
+    sql = resources.files("agents.queue.migrations").joinpath("004_approval_queue.sql").read_text()
+    for line in sql.splitlines():
+        upper = line.upper()
+        if "ADD COLUMN" in upper or upper.startswith("CREATE INDEX"):
+            assert "IF NOT EXISTS" in upper, f"non-idempotent statement: {line!r}"
+    # The new column the worker + sweep depend on.
+    assert "approval_expires_at" in sql
+    # Partial index scoped to the awaiting state backs the guardian sweep.
+    assert "WHERE status = 'awaiting_approval'" in sql
+
+
+def test_park_for_approval_sets_awaiting_status() -> None:
+    """`park_for_approval` moves a claimed task to `awaiting_approval` and
+    stamps the Layer 5 guardian TTL deadline — it must NOT ack `done`."""
+    src = resources.files("agents.queue").joinpath("store.py").read_text()
+    assert "async def park_for_approval" in src
+    assert "status = 'awaiting_approval'" in src
+    assert "approval_expires_at = %s" in src
+
+
+def test_resolve_approval_is_noop_safe_on_expired_row() -> None:
+    """`resolve_approval` only acts on rows still `awaiting_approval`, so a
+    late `/approval` resume after the guardian sweep moved the row to the
+    DLQ can't resurrect it and execute the action."""
+    src = resources.files("agents.queue").joinpath("store.py").read_text()
+    assert "async def resolve_approval" in src
+    assert "status = 'done'" in src
+    # The guard that makes a late resume a no-op.
+    assert "AND status = 'awaiting_approval'" in src
+
+
+def test_expire_overdue_approvals_routes_to_dlq_atomically() -> None:
+    """`expire_overdue_approvals` moves lapsed awaiting-approval rows to the
+    DLQ in one CTE, tagged `approval_ttl_expired` so the DLQ surface
+    distinguishes a lapsed approval from a timed-out or retry-exhausted
+    task. Per HOMELAB-SPEC Layer 5 the task does NOT auto-execute."""
+    src = resources.files("agents.queue").joinpath("store.py").read_text()
+    assert "async def expire_overdue_approvals" in src
+    assert "DELETE FROM task_queue" in src
+    assert "status = 'awaiting_approval'" in src
+    assert "approval_expires_at < NOW()" in src
+    assert "'approval_ttl_expired'" in src
+
+
 def test_taskqueue_attempts_remaining_uses_envelope_policy() -> None:
     """`attempts_remaining` reads max from envelope.retry_policy when set."""
 

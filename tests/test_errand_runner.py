@@ -304,8 +304,12 @@ def test_interrupt_resume_rejected_returns_rejected_output(temp_vault: Path) -> 
     assert "approval not granted" in final["output"]
 
 
-def test_interrupt_resume_deferred_returns_deferred_output(temp_vault: Path) -> None:
-    """Resume with deferred=True → deferred-output; supervisor takes over later."""
+def test_interrupt_resume_deferred_repauses(temp_vault: Path) -> None:
+    """Resume with deferred=True → the node re-interrupts (re-pauses) rather
+    than terminating. Per HOMELAB-SPEC Layer 4 a defer is not a terminal
+    verdict: the task stays parked awaiting Rob, never auto-executes, never
+    completes. The old behavior collapsed defer into a terminal
+    'deferred by rob' output, which acked the durable queue row done."""
     graph = _build_errand_only_graph()
     config = {"configurable": {"thread_id": "t-int-4"}}
 
@@ -331,9 +335,66 @@ def test_interrupt_resume_deferred_returns_deferred_output(temp_vault: Path) -> 
         "actor": "rob",
     }
     with patch("httpx.Client.post", side_effect=AssertionError("must not call MCP")):
-        final = graph.invoke(Command(resume=resume_value), config=config)
+        repaused = graph.invoke(Command(resume=resume_value), config=config)
 
-    assert "deferred by rob" in final["output"]
+    # Re-paused, not completed: the interrupt surfaces again and no
+    # terminal output was produced.
+    assert "__interrupt__" in repaused
+    assert "output" not in repaused or repaused.get("output") is None
+    snap = graph.get_state(config)
+    assert snap.tasks and snap.tasks[0].interrupts
+
+
+def test_interrupt_resume_defer_then_approve_executes(
+    temp_vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A defer followed by an approve resolves correctly: the re-interrupt
+    loop replays and the final granted verdict executes the MCP call.
+    Proves LangGraph feeds the stored resume values to the sequential
+    interrupt() calls in order."""
+    monkeypatch.setenv("LANGGRAPH_APPROVAL_SIGNING_KEY", "test-secret")
+    get_settings.cache_clear()
+
+    graph = _build_errand_only_graph()
+    config = {"configurable": {"thread_id": "t-int-4b"}}
+    token = _signed_token("t-int-4b", "C", "ha-mcp", "call_service", "test-secret")
+
+    initial = FleetState(
+        task_id="t-int-4b",
+        source="test",
+        content="x",
+        approval_request=ApprovalRequest(
+            action_class="C",
+            target="ha-mcp.call_service",
+            payload_summary="turn on porch light",
+            undo_path="ha-mcp.call_service light.turn_off",
+            proposed_by="smart-home-operator",
+        ),
+    )
+    paused = graph.invoke(initial, config=config)
+    assert "__interrupt__" in paused
+
+    # First verdict: defer → re-pause.
+    defer_value = {"granted": False, "deferred": True, "approval_token": "", "actor": "rob"}
+    with patch("httpx.Client.post", side_effect=AssertionError("must not call MCP")):
+        repaused = graph.invoke(Command(resume=defer_value), config=config)
+    assert "__interrupt__" in repaused
+
+    # Second verdict: approve → execute.
+    approve_value = {
+        "granted": True,
+        "deferred": False,
+        "approval_token": token,
+        "actor": "rob",
+    }
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"status": "ok"}
+    fake_response.text = '{"status":"ok"}'
+    with patch("httpx.Client.post", return_value=fake_response):
+        final = graph.invoke(Command(resume=approve_value), config=config)
+
+    assert "executed ha-mcp.call_service" in final["output"]
 
 
 # ---------------------------------------------------------------------------
