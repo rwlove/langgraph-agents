@@ -31,9 +31,13 @@ from opentelemetry import trace
 from pydantic import BaseModel
 
 from agents.idempotency import DedupStore
-from agents.observability import get_logger
+from agents.observability import (
+    get_logger,
+    langgraph_inbox_envelope_rejected_total,
+)
 from agents.settings import get_settings
 from agents.state import (
+    ALL_AGENT_IDS,
     DataTier,
     Intent,
     Origin,
@@ -98,6 +102,45 @@ class InboxResponse(BaseModel):
     paused_for: dict[str, Any] | None = None
 
 
+def _validate_envelope(req: InboxRequest) -> None:
+    """Reject malformed task envelopes at ingress (HOMELAB-SPEC Layer 5).
+
+    Lenient / minimal-mandatory: this enforces only the semantic checks
+    Pydantic can't express on its own. Type-level invalids are already
+    422'd at parse time — `source` / `priority` / `data_tier` / `requester`
+    are `Literal`s, and `RetryPolicy` carries `Field(ge=...)` bounds
+    (`max_attempts >= 1`, `backoff_seconds >= 0`). The optional envelope
+    fields (`origin`, `requester`, `data_tier`, `priority`, `destructive`,
+    `ttl_seconds`, `retry_policy`) intentionally ride on their defaults —
+    no live caller populates the full envelope, so requiring them would
+    reject every current request. The gate tightens naturally as callers
+    enrich.
+
+    Raises HTTPException(422) with a stable `reason` slug on the first
+    failing check; each rejection also increments
+    ``langgraph_inbox_envelope_rejected_total{reason}``.
+    """
+
+    def _reject(reason: str, detail: str) -> None:
+        langgraph_inbox_envelope_rejected_total.labels(reason=reason).inc()
+        slog.warning("inbox_envelope_rejected", reason=reason, client_task_id=req.task_id)
+        raise HTTPException(status_code=422, detail=detail)
+
+    if req.task_id.strip() == "":
+        _reject("task_id_blank", "`task_id` must be a non-empty string")
+    if req.content.strip() == "":
+        _reject("content_blank", "`content` must be a non-empty string")
+    if req.ttl_seconds is not None and req.ttl_seconds <= 0:
+        _reject("ttl_nonpositive", "`ttl_seconds`, when set, must be > 0")
+    if req.idempotency_key is not None and req.idempotency_key.strip() == "":
+        _reject("idempotency_key_blank", "`idempotency_key`, when set, must be non-empty")
+    if req.target_agent is not None and req.target_agent not in ALL_AGENT_IDS:
+        _reject(
+            "unknown_target_agent",
+            f"`target_agent`={req.target_agent!r} is not a known agent id",
+        )
+
+
 def _ensure_trace_id(req: InboxRequest) -> None:
     """Mint a trace_id at ingress when the envelope omits one.
 
@@ -157,6 +200,10 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
     queue = request.app.state.task_queue
     if queue is None:
         raise HTTPException(status_code=503, detail="task queue not initialized")
+
+    # Task-contract validation (HOMELAB-SPEC Layer 5) — reject malformed
+    # envelopes before any dedup-store side effect or enqueue.
+    _validate_envelope(req)
 
     # Renee allowlist (3.I) — same gate as the synchronous flow.
     if req.requester == "renee":

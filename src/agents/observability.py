@@ -142,6 +142,18 @@ langgraph_cost_usd_total = Counter(
     _LABELS_COST,
 )
 
+# Task envelopes rejected at /inbox by the contract validator
+# (HOMELAB-SPEC Layer 5 "rejected at ingress"). The `reason` label is one
+# of the validator's criterion slugs (task_id_blank, content_blank,
+# ttl_nonpositive, idempotency_key_blank, unknown_target_agent). Today the
+# validator runs lenient, so a non-zero series is ground truth on which
+# malformed envelopes the front door actually sees.
+langgraph_inbox_envelope_rejected_total = Counter(
+    "langgraph_inbox_envelope_rejected_total",
+    "Task envelopes rejected at /inbox by the contract validator.",
+    ("reason",),
+)
+
 langgraph_llm_duration_seconds = Histogram(
     "langgraph_llm_duration_seconds",
     "Wall-clock duration of LLM invocations.",
