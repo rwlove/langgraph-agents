@@ -96,7 +96,9 @@ def _with_activity_log(
 
     if inspect.iscoroutinefunction(fn):
         async def async_wrapper(state: FleetState) -> dict[str, Any]:
-            token = structlog.contextvars.bind_contextvars(agent=agent_id)
+            token = structlog.contextvars.bind_contextvars(
+                agent=agent_id, cascade_count=state.cascade_count
+            )
             slog.info("node_start")
             t0 = time.perf_counter()
             try:
@@ -121,8 +123,12 @@ def _with_activity_log(
         # the Loki dashboard trail viewer joins on. Token-based unbind on the
         # way out is essential — LangGraph runs nodes serially in the same
         # asyncio task, so without it the next node inherits the previous
-        # node's `agent` label.
-        token = structlog.contextvars.bind_contextvars(agent=agent_id)
+        # node's `agent` label. cascade_count rides along so the router scorer
+        # can read the current re-route depth at the llm() chokepoint (used
+        # only when router_escalate_on_cascade is enabled).
+        token = structlog.contextvars.bind_contextvars(
+            agent=agent_id, cascade_count=state.cascade_count
+        )
         slog.info("node_start")
         t0 = time.perf_counter()
         try:

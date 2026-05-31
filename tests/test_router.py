@@ -44,10 +44,20 @@ def _clear_health_cache() -> None:
     reset_cache()
 
 
-def _settings(*, enabled: bool = True, threshold: int = 1000) -> Settings:
+def _settings(
+    *,
+    enabled: bool = True,
+    threshold: int = 1000,
+    on_destructive: bool = False,
+    on_cascade: bool = False,
+    cascade_threshold: int = 2,
+) -> Settings:
     return Settings(
         router_scorer_enabled=enabled,
         router_escalate_token_threshold=threshold,
+        router_escalate_on_destructive=on_destructive,
+        router_escalate_on_cascade=on_cascade,
+        router_cascade_threshold=cascade_threshold,
     )
 
 
@@ -110,6 +120,84 @@ def test_claude_group_is_a_noop() -> None:
     structlog.contextvars.bind_contextvars(data_tier="internal", est_input_tokens=99999)
     decision = score_route("coder", "claude", _settings(threshold=1000))
     assert decision == RouteDecision(escalate=False, reason="local_default")
+
+
+# --- opt-in triggers (default OFF) -------------------------------------------
+
+
+def test_destructive_does_not_escalate_by_default() -> None:
+    # Flag defaults False — a destructive task stays local under threshold.
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", est_input_tokens=10, destructive=True
+    )
+    decision = score_route("coder", "local-spark-coder", _settings())
+    assert decision == RouteDecision(escalate=False, reason="local_default")
+
+
+def test_destructive_escalates_when_enabled() -> None:
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", est_input_tokens=10, destructive=True
+    )
+    decision = score_route("coder", "local-spark-coder", _settings(on_destructive=True))
+    assert decision == RouteDecision(escalate=True, reason="destructive_escalation")
+
+
+def test_destructive_false_stays_local_when_enabled() -> None:
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", est_input_tokens=10, destructive=False
+    )
+    decision = score_route("coder", "local-spark-coder", _settings(on_destructive=True))
+    assert decision == RouteDecision(escalate=False, reason="local_default")
+
+
+def test_destructive_restricted_still_pinned_local_when_enabled() -> None:
+    # Restricted-tier guard precedes the opt-in triggers — never escalates.
+    structlog.contextvars.bind_contextvars(
+        data_tier="restricted", est_input_tokens=10, destructive=True
+    )
+    decision = score_route("coder", "local-spark-coder", _settings(on_destructive=True))
+    assert decision == RouteDecision(escalate=False, reason="restricted_pinned_local")
+
+
+def test_cascade_does_not_escalate_by_default() -> None:
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", est_input_tokens=10, cascade_count=5
+    )
+    decision = score_route("coder", "local-spark-coder", _settings())
+    assert decision == RouteDecision(escalate=False, reason="local_default")
+
+
+def test_cascade_escalates_at_threshold_when_enabled() -> None:
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", est_input_tokens=10, cascade_count=2
+    )
+    decision = score_route(
+        "coder", "local-spark-coder", _settings(on_cascade=True, cascade_threshold=2)
+    )
+    assert decision == RouteDecision(escalate=True, reason="cascade_escalation")
+
+
+def test_cascade_below_threshold_stays_local_when_enabled() -> None:
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", est_input_tokens=10, cascade_count=1
+    )
+    decision = score_route(
+        "coder", "local-spark-coder", _settings(on_cascade=True, cascade_threshold=2)
+    )
+    assert decision == RouteDecision(escalate=False, reason="local_default")
+
+
+def test_context_overflow_wins_over_opt_in_triggers() -> None:
+    # Stronger capability reason reported when multiple conditions hold.
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", est_input_tokens=99999, destructive=True, cascade_count=9
+    )
+    decision = score_route(
+        "coder",
+        "local-spark-coder",
+        _settings(on_destructive=True, on_cascade=True),
+    )
+    assert decision == RouteDecision(escalate=True, reason="context_overflow")
 
 
 # --- llm() integration -------------------------------------------------------

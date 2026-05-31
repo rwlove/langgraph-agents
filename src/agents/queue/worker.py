@@ -263,6 +263,7 @@ class QueueWorker:
             "user": envelope.get("user", "rob"),
             "data_tier": envelope.get("data_tier", "internal"),
             "est_input_tokens": estimate_input_tokens(envelope.get("content", "")),
+            "destructive": bool(envelope.get("destructive")),
         }
         # trace_id is minted at ingress (api/inbox._ensure_trace_id); bind
         # it so every node + worker log line for this task — and the
@@ -327,9 +328,7 @@ class QueueWorker:
             # Park the durable row at `awaiting_approval` with the Layer 5
             # guardian TTL. The /approval resume path acks it `done`; the
             # guardian sweep expires it to the DLQ if Rob never answers.
-            await self._queue.park_for_approval(
-                task_id, self._approval_deadline(envelope)
-            )
+            await self._queue.park_for_approval(task_id, self._approval_deadline(envelope))
             return
 
         await self._ack_with_result(task_id, output)
@@ -421,9 +420,7 @@ class QueueWorker:
         # routed differently than the requester guessed).
         target_agent: str | None = None
         try:
-            snapshot = await self._graph.aget_state(
-                {"configurable": {"thread_id": task_id}}
-            )
+            snapshot = await self._graph.aget_state({"configurable": {"thread_id": task_id}})
             if snapshot and snapshot.values:
                 target_agent = snapshot.values.get("target_agent")
         except Exception:
