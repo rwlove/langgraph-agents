@@ -10,14 +10,20 @@ NetworkPolicy that constrains ingress.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
-from datetime import UTC, date, datetime
+import secrets
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, HTTPException, Request
+from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from agents.llm import AGENT_GROUP
+from agents.observability import get_logger
 from agents.paused_threads import (
     DEFAULT_STALE_AFTER_SECONDS,
     sweep_paused_threads,
@@ -28,6 +34,7 @@ from agents.settings import get_settings
 from agents.state import ALL_AGENT_IDS, ApprovalRequest, FleetState, TimeoutTier
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+slog = get_logger("api.admin")
 
 
 @router.get("/agents")
@@ -316,6 +323,186 @@ async def cancel_task(task_id: str, body: CancelBody, request: Request) -> dict[
         },
     )
     return {"task_id": task_id, "status": "cancelled", "reason": body.reason}
+
+
+# ---- approve / deny (HA Companion tap-to-act surface) ----
+#
+# These two endpoints are the server-side half of the HA-Companion
+# approvals flow (HomeAIOps Gate-2 slice 3). They do for the phone what
+# the ntfy action-buttons do via Windmill: resume a paused approval
+# interrupt with a verdict. The difference is WHERE the HMAC token comes
+# from. The ntfy buttons carry a token Windmill minted; these endpoints
+# mint it HERE, server-side, so the phone never has to hold the signing
+# secret — HA just POSTs its existing `/admin` bearer (the same
+# `hai_cli_token` it already uses for the slice-1 voice→task flow) and
+# names the task. The minted token still has to satisfy errand-runner's
+# downstream `_verify_approval_token`, so the signing format below is a
+# hard mirror of that verifier; `tests/test_admin_approve_deny.py`
+# round-trips against the real verifier to catch any drift.
+#
+# Auth: `/admin/*` is Bearer-gated by `api.auth.hai_cli_auth_middleware`,
+# so these inherit the same gate as every other admin mutation. The
+# `/approval` endpoint (ntfy path) is deliberately auth-exempt because
+# its body carries the HMAC token AS the auth; here the bearer is the
+# auth and the token is minted under it.
+
+
+def _sign_approval_token(
+    task_id: str,
+    action_class: str,
+    server: str,
+    method: str,
+    *,
+    signing_secret: str,
+    nonce: str | None = None,
+) -> str:
+    """Mint an HMAC-SHA256 approval token errand-runner will accept.
+
+    Format is the exact contract `errand_runner._verify_approval_token`
+    checks: ``task_id|class|server|method|<nonce>:<hex-sig>`` where the
+    signature is ``HMAC-SHA256(secret, "task_id|class|server|method|nonce")``.
+    Same scheme Windmill's `langgraph-approval-post.ts` uses — this is the
+    in-cluster equivalent so the phone path needs no Windmill round-trip.
+    The nonce is random per mint (errand-runner ignores its content; it
+    only requires the first four fields to match the live request).
+    """
+    nonce = nonce or secrets.token_hex(8)
+    payload = f"{task_id}|{action_class}|{server}|{method}|{nonce}"
+    signature = hmac.new(
+        signing_secret.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload}:{signature}"
+
+
+def _pick_graph(request: Request, task_id: str) -> tuple[Any, str]:
+    """Resolve smoke vs fleet graph by task_id prefix (mirrors api/approval)."""
+    if task_id.startswith("smoke-"):
+        return getattr(request.app.state, "smoke_graph", None), "smoke_graph"
+    return request.app.state.graph, "fleet_graph"
+
+
+async def _resume_with_verdict(
+    request: Request,
+    task_id: str,
+    *,
+    granted: bool,
+    actor: str,
+) -> dict[str, Any]:
+    """Resume a paused approval interrupt with a verdict; reconcile the queue.
+
+    Shared body for the approve/deny endpoints. On approve, mints a fresh
+    signed token from the live interrupt's `action_class` + `target` so
+    errand-runner's HMAC verify passes. On deny, no valid token is needed
+    (errand-runner refuses before it verifies), so an empty token is sent.
+
+    Reconciliation mirrors `api/approval.post_approval`: if the graph is
+    STILL paused after the resume (a defer, or the two-person second
+    confirmation re-interrupt), re-park with a fresh TTL and report
+    `resumed`; otherwise the graph ran to a terminal state and we ack the
+    queue row `done`.
+    """
+    graph, graph_name = _pick_graph(request, task_id)
+    if graph is None:
+        raise HTTPException(status_code=503, detail=f"{graph_name} not initialized")
+
+    structlog.contextvars.bind_contextvars(
+        task_id=task_id,
+        actor=actor,
+        reaction="approve" if granted else "reject",
+        graph=graph_name,
+    )
+
+    config = {"configurable": {"thread_id": task_id}}
+    snapshot = await graph.aget_state(config)
+    if not snapshot.tasks or not snapshot.tasks[0].interrupts:
+        raise HTTPException(
+            status_code=409,
+            detail=f"task {task_id} is not paused at an approval interrupt",
+        )
+
+    approval_token = ""
+    if granted:
+        # The interrupt value is `ApprovalRequest.model_dump()` (or the
+        # two-person confirm payload, a superset) — both carry
+        # `action_class` + `target`. Mint the token those fields require.
+        interrupt_value = snapshot.tasks[0].interrupts[0].value or {}
+        action_class = interrupt_value.get("action_class")
+        target = interrupt_value.get("target") or ""
+        if not action_class or "." not in target:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"task {task_id} interrupt missing action_class/target "
+                    "('server.method'); cannot mint approval token"
+                ),
+            )
+        server, method = target.split(".", 1)
+        signing_secret = get_settings().langgraph_approval_signing_key
+        if not signing_secret:
+            raise HTTPException(
+                status_code=503,
+                detail="langgraph_approval_signing_key not configured; cannot approve",
+            )
+        approval_token = _sign_approval_token(
+            task_id, action_class, server, method, signing_secret=signing_secret
+        )
+
+    resume_value = {
+        "granted": granted,
+        "deferred": False,
+        "approval_token": approval_token,
+        "actor": actor,
+    }
+    final = await graph.ainvoke(Command(resume=resume_value), config=config)
+    output = final.get("output")
+
+    queue = getattr(request.app.state, "task_queue", None)
+    if queue is not None and not task_id.startswith("smoke-"):
+        post_resume = await graph.aget_state(config)
+        still_paused = bool(post_resume.tasks and post_resume.tasks[0].interrupts)
+        if still_paused:
+            deadline = datetime.now(UTC) + timedelta(seconds=get_settings().approval_ttl_seconds)
+            await queue.park_for_approval(task_id, deadline)
+            slog.info("admin_verdict_reparked", granted=granted)
+            return {"task_id": task_id, "status": "resumed", "output": output}
+        await queue.resolve_approval(task_id, output)
+
+    slog.info("admin_verdict_complete", granted=granted, has_output=output is not None)
+    return {"task_id": task_id, "status": "complete", "output": output}
+
+
+class VerdictBody(BaseModel):
+    actor: str = "rob"
+
+
+@router.post("/tasks/{task_id}/approve")
+async def approve_task(
+    task_id: str, request: Request, body: VerdictBody | None = None
+) -> dict[str, Any]:
+    """Approve a paused task — resume the interrupt with a granted verdict.
+
+    Bearer-gated (`/admin/*`). Mints the HMAC approval token server-side
+    so the caller (HA Companion automation) never holds the signing
+    secret. A namespace-delete two-person task re-pauses after this first
+    grant and reports `resumed`; a second approve executes it.
+    """
+    actor = body.actor if body else "rob"
+    return await _resume_with_verdict(request, task_id, granted=True, actor=actor)
+
+
+@router.post("/tasks/{task_id}/deny")
+async def deny_task(
+    task_id: str, request: Request, body: VerdictBody | None = None
+) -> dict[str, Any]:
+    """Deny a paused task — resume the interrupt with a rejected verdict.
+
+    Bearer-gated (`/admin/*`). No signed token is needed: errand-runner
+    refuses on `granted=False` before it verifies the token.
+    """
+    actor = body.actor if body else "rob"
+    return await _resume_with_verdict(request, task_id, granted=False, actor=actor)
 
 
 # ---- task usage stats ----
