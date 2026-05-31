@@ -528,3 +528,57 @@ def test_list_tasks_status_filter_503_when_queue_unwired(temp_vault: Path) -> No
     with TestClient(app) as client:
         r = client.get("/admin/tasks", params={"status": "awaiting_approval"})
     assert r.status_code == 503
+
+
+# ---- usage-stats group breakdown (hai cost local-vs-escalated split) ----
+
+
+def test_group_breakdown_splits_local_vs_escalated() -> None:
+    """_group_breakdown maps agents to their static AGENT_GROUP tier."""
+    # triager/note-maker/errand-runner → local-p40; researcher → local-spark;
+    # coder → local-spark-coder. None are claude, so all are local.
+    by_agent = {"triager": 10, "researcher": 5, "coder": 3, "note-maker": 2}
+    by_group, by_tier = admin._group_breakdown(by_agent)
+
+    assert by_tier == {"local": 20}
+    # local-p40 = triager(10) + note-maker(2) = 12; spark = 5; coder = 3
+    assert by_group == {"local-p40": 12, "local-spark": 5, "local-spark-coder": 3}
+
+
+def test_group_breakdown_unknown_agent_bucketed_not_dropped() -> None:
+    """Agents absent from AGENT_GROUP (incl. the (unknown) bucket) count as (unknown)."""
+    by_agent = {"triager": 4, "(unknown)": 3, "not-a-real-agent": 1}
+    by_group, by_tier = admin._group_breakdown(by_agent)
+
+    assert by_tier == {"local": 4, "(unknown)": 4}
+    assert by_group["local-p40"] == 4
+    assert by_group["(unknown)"] == 4
+    # total preserved — nothing dropped
+    assert sum(by_tier.values()) == sum(by_agent.values())
+
+
+def test_group_breakdown_sorted_descending() -> None:
+    """Both maps are sorted by count descending, matching by_agent/by_source."""
+    by_agent = {"note-maker": 1, "researcher": 9, "triager": 4}
+    by_group, by_tier = admin._group_breakdown(by_agent)
+
+    assert list(by_group.values()) == sorted(by_group.values(), reverse=True)
+    assert list(by_tier.values()) == sorted(by_tier.values(), reverse=True)
+
+
+def test_group_breakdown_empty() -> None:
+    """No completions → empty breakdowns, no crash."""
+    assert admin._group_breakdown({}) == ({}, {})
+
+
+def test_group_breakdown_claude_pinned_agent_is_escalated(monkeypatch: Any) -> None:
+    """If an agent is pinned to the claude group, it counts as escalated.
+
+    No agent is statically pinned to claude today (escalation is runtime),
+    so we patch the map to prove the escalated branch is wired correctly.
+    """
+    monkeypatch.setitem(admin.AGENT_GROUP, "researcher", "claude")
+    by_group, by_tier = admin._group_breakdown({"researcher": 7, "triager": 2})
+
+    assert by_tier == {"escalated": 7, "local": 2}
+    assert by_group["claude"] == 7

@@ -293,11 +293,25 @@ def _render_cost_table(data: dict[str, Any]) -> None:
         print(f"{'─' * 30}  {'─' * 6}")
         for source, count in by_source.items():
             print(f"{source:30s}  {count:>6d}")
+        print()
 
-    print()
-    print(
-        "# TODO: add model/local vs claude column when provenance lands"
-    )
+    by_tier: dict[str, int] = data.get("by_tier") or {}
+    by_group: dict[str, int] = data.get("by_group") or {}
+    if by_tier or by_group:
+        print(f"{'MODEL GROUP':30s}  {'COUNT':>6s}")
+        print(f"{'─' * 30}  {'─' * 6}")
+        for tier, count in by_tier.items():
+            print(f"{tier:30s}  {count:>6d}")
+        if by_group:
+            print(f"{'─' * 30}  {'─' * 6}")
+            for group, count in by_group.items():
+                print(f"  {group:28s}  {count:>6d}")
+        print()
+        print(
+            "# group derived from each agent's static AGENT_GROUP; runtime escalations\n"
+            "# to Claude (escalate=True / group_override) are NOT persisted per-completion,\n"
+            "# so 'escalated' undercounts until that provenance lands on the task row."
+        )
 
 
 def cmd_cost(args: argparse.Namespace) -> None:
