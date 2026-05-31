@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from agents.llm import AGENT_GROUP
 from agents.paused_threads import (
     DEFAULT_STALE_AFTER_SECONDS,
     sweep_paused_threads,
@@ -320,6 +321,50 @@ async def cancel_task(task_id: str, body: CancelBody, request: Request) -> dict[
 # ---- task usage stats ----
 
 
+def _group_breakdown(by_agent: dict[str, int]) -> tuple[dict[str, int], dict[str, int]]:
+    """Split per-agent completion counts into local-vs-escalated by model group.
+
+    The model group is NOT persisted per-completion — only ``target_agent``
+    is (see ``UsageStats``). We derive the group from the static
+    ``AGENT_GROUP`` map: ``claude`` → escalated, every ``local-*`` group →
+    local. This reflects each agent's *configured* group, not runtime
+    routing — a Spark-down degrade to P40 or an ``escalate=True`` override
+    isn't captured here because that provenance never lands on the row.
+    Agents missing from the map (e.g. the ``"(unknown)"`` bucket) count as
+    ``"(unknown)"`` rather than being silently dropped.
+
+    Today no agent is statically pinned to ``claude`` (escalation is purely
+    a runtime decision), so ``escalated`` will read 0 from this data source —
+    the ``claude`` branch exists so the split is correct the moment either an
+    agent is pinned to ``claude`` or escalation provenance starts landing on
+    the task row.
+
+    Returns ``(by_group, by_tier)`` where ``by_group`` keys on the
+    ``AGENT_GROUP`` group name and ``by_tier`` keys on
+    ``local`` / ``escalated`` / ``(unknown)``.
+    """
+    # AGENT_GROUP is keyed on the AgentId Literal; by_agent keys are plain
+    # strs (they include the synthetic "(unknown)" bucket), so look up via a
+    # cast and treat any miss as unknown.
+    group_for: dict[str, str] = {str(a): g for a, g in AGENT_GROUP.items()}
+    by_group: dict[str, int] = {}
+    by_tier: dict[str, int] = {}
+    for agent, count in by_agent.items():
+        group = group_for.get(agent)
+        if group is None:
+            group_key = "(unknown)"
+            tier = "(unknown)"
+        else:
+            group_key = group
+            tier = "escalated" if group == "claude" else "local"
+        by_group[group_key] = by_group.get(group_key, 0) + count
+        by_tier[tier] = by_tier.get(tier, 0) + count
+    return (
+        dict(sorted(by_group.items(), key=lambda x: x[1], reverse=True)),
+        dict(sorted(by_tier.items(), key=lambda x: x[1], reverse=True)),
+    )
+
+
 class UsageStats(BaseModel):
     """Task completion counts over the requested window.
 
@@ -329,13 +374,18 @@ class UsageStats(BaseModel):
     almost always carry it. The rare ``""`` / missing value is grouped
     under ``"(unknown)"``.
 
-    # TODO: add model/local vs claude column when provenance lands
+    by_group and by_tier are derived from ``by_agent`` via the static
+    ``AGENT_GROUP`` map (see ``_group_breakdown``). They report the
+    *configured* model group per agent — runtime escalations / degrades
+    aren't persisted, so they're not reflected here.
     """
 
     days: int
     total_tasks: int
     by_agent: dict[str, int]
     by_source: dict[str, int]
+    by_group: dict[str, int]
+    by_tier: dict[str, int]
 
 
 @router.get("/cost", response_model=UsageStats)
@@ -383,11 +433,16 @@ async def get_usage_stats(request: Request, days: int = 7) -> UsageStats:
         by_source[source] = by_source.get(source, 0) + n
         total += n
 
+    sorted_by_agent = dict(sorted(by_agent.items(), key=lambda x: x[1], reverse=True))
+    by_group, by_tier = _group_breakdown(sorted_by_agent)
+
     return UsageStats(
         days=days,
         total_tasks=total,
-        by_agent=dict(sorted(by_agent.items(), key=lambda x: x[1], reverse=True)),
+        by_agent=sorted_by_agent,
         by_source=dict(sorted(by_source.items(), key=lambda x: x[1], reverse=True)),
+        by_group=by_group,
+        by_tier=by_tier,
     )
 
 
