@@ -35,9 +35,11 @@ from agents.observability import (
     agent_daily_spend_usd,
     global_claude_spend_usd,
     langfuse_callback_handler,
+    langgraph_router_decision_total,
     task_spend_usd,
 )
 from agents.redaction import assert_emission_allowed
+from agents.router import score_route
 from agents.settings import get_settings
 
 if TYPE_CHECKING:
@@ -217,6 +219,20 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
         escalate = False
 
     group: ModelGroup = group_override or AGENT_GROUP[agent_id]
+
+    # Router scorer (HOMELAB-SPEC Layer 6) — the local-vs-Claude gate. Runs
+    # after health-tracker is hard-pinned local (above) and after group
+    # resolution, so it can only ever flip a local group to Claude, never the
+    # reverse. The decision is always recorded; we only act on it when an API
+    # key is present, so a "no key" cluster degrades to local exactly as today.
+    decision = score_route(agent_id, group, settings)
+    langgraph_router_decision_total.labels(
+        agent=agent_id,
+        decision="escalate" if decision.escalate else "local",
+        reason=decision.reason,
+    ).inc()
+    if decision.escalate and settings.anthropic_api_key:
+        escalate = True
 
     if escalate and settings.anthropic_api_key:
         return _build_claude(settings, agent_id, "claude", temperature=temperature, trigger=trigger)

@@ -46,6 +46,7 @@ from agents.observability import (
     langgraph_awaiting_approval_tasks,
 )
 from agents.queue.approval_post import has_pending_approval, post_approval_for_interrupts
+from agents.router import estimate_input_tokens
 from agents.settings import get_settings
 from agents.state import FleetState
 from agents.tools import pushover
@@ -261,6 +262,7 @@ class QueueWorker:
             "source": envelope.get("source", "test"),
             "user": envelope.get("user", "rob"),
             "data_tier": envelope.get("data_tier", "internal"),
+            "est_input_tokens": estimate_input_tokens(envelope.get("content", "")),
         }
         # trace_id is minted at ingress (api/inbox._ensure_trace_id); bind
         # it so every node + worker log line for this task — and the

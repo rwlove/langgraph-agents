@@ -241,6 +241,29 @@ class Settings(BaseSettings):
     cost_cap_per_agent_daily_usd: float = 10.0
     cost_cap_global_daily_usd: float = 30.0
 
+    # --- router scorer (HOMELAB-SPEC Layer 6) ---
+    router_scorer_enabled: bool = Field(
+        default=True,
+        description=(
+            "Kill switch for the deterministic router scorer (agents.router). "
+            "Default ON per the enforce-now posture: the scorer runs on every "
+            "llm() call and may escalate local->Claude on a high, "
+            "capability-driven bar. Set False to pin the fleet 100% local."
+        ),
+    )
+    router_escalate_token_threshold: int = Field(
+        default=24000,
+        description=(
+            "Estimated assembled-prompt tokens above which the scorer escalates "
+            "to Claude (reason=context_overflow). Deliberately high: the local "
+            "ChatOllama clients set no num_ctx so the real local ceiling is "
+            "Ollama's runtime default, and conservative-on-cost means only a "
+            "genuine overflow (e.g. a pasted multi-thousand-line log) trips it. "
+            "Lower it once langgraph_router_decision_total shows real overflow "
+            "rates. Cost caps remain the hard floor regardless."
+        ),
+    )
+
     # --- startup sweep ---
     # P3.7's startup sweep walks the langgraph_checkpoints table to log
     # stale paused threads. Default OFF because (a) no node calls

@@ -1,0 +1,91 @@
+"""Deterministic router scorer — the local-vs-Claude (escalate) gate.
+
+HOMELAB-SPEC Layer 6: the router "picks the cheapest model that can complete
+the step," cheap/local/fast, with the explicit goal of reducing remote usage
+over time. This module is the heuristic, enforce-now-conservative
+implementation: plain rules over task signals, no local-model scorer.
+
+It is intentionally a *pure* function. `score_route` reads the same structlog
+contextvars `agents.llm` already reads (`data_tier`, plus the `est_input_tokens`
+bound at ingress) and returns a decision; it constructs no models and performs
+no I/O. `agents.llm.llm()` calls it at the single routing chokepoint, emits the
+decision metric, and lets the existing escalate machinery (cost caps, the
+restricted-tier emission gate) act on the result.
+
+v1 escalates on exactly one capability-driven condition: estimated input size
+exceeds a configured local-context ceiling — the only case where local
+genuinely *cannot* do the work (Layer 6 "context length needed" + Layer 5
+"route to a stronger model"). Everything else stays local. See
+`docs`/the plan for why cascade/destructive/priority triggers are deferred.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+import structlog
+
+if TYPE_CHECKING:
+    from agents.llm import ModelGroup
+    from agents.settings import Settings
+    from agents.state import AgentId
+
+# Token estimation. We have no tokenizer dependency and don't want one on the
+# hot path, so approximate: English prose averages ~4 chars/token, and the
+# assembled prompt is always larger than the raw inbox `content` (system
+# prompt + gathered evidence + activity log). The fixed overhead makes the
+# estimate *over*-count, which is the safe direction — it can only push a task
+# toward escalation, never hide a genuine overflow.
+_CHARS_PER_TOKEN = 4
+_PROMPT_OVERHEAD_TOKENS = 2000
+
+
+def estimate_input_tokens(content: str) -> int:
+    """Cheap, deterministic upper-ish estimate of assembled prompt size.
+
+    Bound at ingress into the `est_input_tokens` contextvar so `score_route`
+    can read it without re-deriving from raw content (which it doesn't have).
+    """
+    return len(content) // _CHARS_PER_TOKEN + _PROMPT_OVERHEAD_TOKENS
+
+
+@dataclass(frozen=True)
+class RouteDecision:
+    """Result of the scorer. `reason` doubles as the metric label."""
+
+    escalate: bool
+    reason: str  # local_default | context_overflow | restricted_pinned_local | scorer_disabled
+
+
+def score_route(agent_id: AgentId, group: ModelGroup, settings: Settings) -> RouteDecision:
+    """Decide whether `agent_id`'s call should escalate to Claude.
+
+    Conservative by construction — returns ``escalate=False`` for everything
+    except a genuine local-context overflow. Never escalates restricted-tier
+    data (belt-and-suspenders ahead of the hard `_build_claude` emission gate),
+    and is a no-op when the call is already on the Claude group.
+    """
+    if not settings.router_scorer_enabled:
+        return RouteDecision(escalate=False, reason="scorer_disabled")
+
+    # Already heading to Claude (explicit override / escalate kwarg). The
+    # scorer only ever flips local -> claude, never the reverse.
+    if group == "claude":
+        return RouteDecision(escalate=False, reason="local_default")
+
+    ctx = structlog.contextvars.get_contextvars()
+
+    # Restricted-tier data never leaves for a remote model. `_build_claude`
+    # enforces this hard via assert_emission_allowed; the scorer refuses to
+    # even decide to escalate it.
+    if ctx.get("data_tier") == "restricted":
+        return RouteDecision(escalate=False, reason="restricted_pinned_local")
+
+    # The one capability-driven trigger. Unbound (directly-enqueued tasks,
+    # tests, legacy callers that never hit /inbox) reads as 0 -> stays local.
+    est_input_tokens = ctx.get("est_input_tokens", 0)
+    if est_input_tokens > settings.router_escalate_token_threshold:
+        return RouteDecision(escalate=True, reason="context_overflow")
+
+    return RouteDecision(escalate=False, reason="local_default")
