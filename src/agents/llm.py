@@ -178,6 +178,17 @@ AGENT_GROUP: dict[AgentId, ModelGroup] = {
 }
 
 
+def _claude_allowed(settings: Settings) -> bool:
+    """Master gate for any Claude call.
+
+    Both conditions are required: the ``ENABLE_CLAUDE_API`` kill switch is on
+    AND a key is present. Every Claude routing gate in ``llm()`` checks this so
+    a single ``ENABLE_CLAUDE_API=false`` pins the fleet 100% local without
+    touching the key. ``_build_claude`` re-checks both as a hard backstop.
+    """
+    return settings.enable_claude_api and settings.anthropic_api_key is not None
+
+
 def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing branches
     agent_id: AgentId,
     *,
@@ -189,10 +200,14 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
     """Return a chat model for `agent_id`.
 
     Routing rules:
+    - ENABLE_CLAUDE_API is the master kill switch: when false, EVERY Claude path
+      below is refused (escalation degrades to local; an explicit `group="claude"`
+      request raises) regardless of ANTHROPIC_API_KEY. See `_claude_allowed`.
     - health-tracker NEVER escalates to Claude (hard constraint); explicit
       escalate=True or group_override="claude" is silently downgraded to
       `local-p40`.
-    - If `escalate=True` AND ANTHROPIC_API_KEY is set, return Claude.
+    - If `escalate=True` AND Claude is allowed (key set + master switch on),
+      return Claude.
     - Otherwise use the per-agent group from `AGENT_GROUP` (or `group_override`).
     - `local-spark` / `local-spark-coder`: fall back to `local-p40` if Spark
       unhealthy (degraded routing — qwen2.5:7b instead of the 32b general or
@@ -231,15 +246,20 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
         decision="escalate" if decision.escalate else "local",
         reason=decision.reason,
     ).inc()
-    if decision.escalate and settings.anthropic_api_key:
+    if decision.escalate and _claude_allowed(settings):
         escalate = True
 
-    if escalate and settings.anthropic_api_key:
+    if escalate and _claude_allowed(settings):
         return _build_claude(settings, agent_id, "claude", temperature=temperature, trigger=trigger)
 
     if group == "claude":
-        if not settings.anthropic_api_key:
-            msg = f"agent {agent_id!r} requested Claude but ANTHROPIC_API_KEY is not set"
+        if not _claude_allowed(settings):
+            reason = (
+                "ENABLE_CLAUDE_API is false"
+                if not settings.enable_claude_api
+                else "ANTHROPIC_API_KEY is not set"
+            )
+            msg = f"agent {agent_id!r} requested Claude but {reason}"
             raise RuntimeError(msg)
         return _build_claude(settings, agent_id, "claude", temperature=temperature, trigger=trigger)
 
@@ -267,7 +287,7 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
                 temperature=temperature,
                 trigger=trigger,
             )
-        if settings.degraded_mode_escalation_enabled and settings.anthropic_api_key:
+        if settings.degraded_mode_escalation_enabled and _claude_allowed(settings):
             return _build_claude(
                 settings, agent_id, "claude", temperature=temperature, trigger=trigger
             )
@@ -283,7 +303,7 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
             temperature=temperature,
             trigger=trigger,
         )
-    if settings.degraded_mode_escalation_enabled and settings.anthropic_api_key:
+    if settings.degraded_mode_escalation_enabled and _claude_allowed(settings):
         return _build_claude(settings, agent_id, "claude", temperature=temperature, trigger=trigger)
     raise LocalOllamaUnavailable(group, agent_id, failed_group="local-p40")
 
@@ -348,6 +368,14 @@ def _build_claude(
     # be SecretStr; callers ensure non-None via the escalate-path checks in llm().
     if settings.anthropic_api_key is None:
         msg = "ANTHROPIC_API_KEY required for Claude path but is None"
+        raise RuntimeError(msg)
+
+    # Master kill-switch hard backstop. Every llm() routing gate already checks
+    # _claude_allowed(), so this is unreachable in normal flow — it guarantees
+    # that even a future direct _build_claude caller cannot bypass
+    # ENABLE_CLAUDE_API=false.
+    if not settings.enable_claude_api:
+        msg = "ENABLE_CLAUDE_API is false but a Claude path was reached"
         raise RuntimeError(msg)
 
     # Phase 3.H — data-tier gate. Restricted-tier tasks never escalate

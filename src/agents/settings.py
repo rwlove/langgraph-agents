@@ -82,11 +82,16 @@ class Settings(BaseSettings):
         ),
     )
     enable_claude_api: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "DEPRECATED master switch — kept for backward compat. New flow uses "
-            "the per-call escalate= kwarg + degraded_mode_escalation_enabled "
-            "flag in agents.llm."
+            "Master kill switch for ALL Claude/Anthropic calls. When False, "
+            "agents.llm refuses every Claude path — scorer escalation, explicit "
+            "escalate=, group='claude', and degraded-mode fallback all degrade to "
+            "local (or raise for an explicit-claude request) regardless of whether "
+            "ANTHROPIC_API_KEY is set. Enforced both at each routing gate and as a "
+            "hard backstop in _build_claude. Default True preserves the historical "
+            "key-presence-gates-Claude behavior; set False (env ENABLE_CLAUDE_API) "
+            "to pin the fleet 100% local without touching the key/ExternalSecret."
         ),
     )
     degraded_mode_escalation_enabled: bool = Field(
