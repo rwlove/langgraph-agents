@@ -281,6 +281,44 @@ class Settings(BaseSettings):
             "with headroom. Keep >= router_escalate_token_threshold."
         ),
     )
+    router_escalate_on_destructive: bool = Field(
+        default=False,
+        description=(
+            "Opt-in trigger: when True the scorer escalates any task flagged "
+            "destructive=true to Claude (reason=destructive_escalation), "
+            "implementing HOMELAB-SPEC Layer 5 'destructive steps get the "
+            "strongest reviewer'. Default OFF: enforce-now-conservative (#109) "
+            "deliberately ships one capability-driven trigger (context_overflow) "
+            "and nothing cost-driven until the decision metric shows real rates. "
+            "Restricted-tier data is still never escalated regardless of this "
+            "flag. Flip per-deployment once you want destructive review on "
+            "Claude and have watched langgraph_router_decision_total."
+        ),
+    )
+    router_escalate_on_cascade: bool = Field(
+        default=False,
+        description=(
+            "Opt-in trigger: when True the scorer escalates a task once its "
+            "supervisor re-route count reaches router_cascade_threshold "
+            "(reason=cascade_escalation). NOTE: cascade_count tracks supervisor "
+            "*re-routes*, not local-model *failures* -- a task can bounce for "
+            "routing reasons unrelated to local capability, so this is a weaker "
+            "signal than context_overflow. Default OFF; do not enable until "
+            "per-completion failure provenance exists to confirm cascades "
+            "correlate with genuine local incapability. Restricted-tier data is "
+            "still never escalated regardless of this flag."
+        ),
+    )
+    router_cascade_threshold: int = Field(
+        default=2,
+        description=(
+            "Re-route count at/above which router_escalate_on_cascade fires "
+            "(inclusive). Matches the supervisor's own cascade limit of 2 -- by "
+            "the time a task has bounced this many times, the local routing has "
+            "demonstrably failed to settle. Inert unless "
+            "router_escalate_on_cascade is True."
+        ),
+    )
 
     # --- startup sweep ---
     # P3.7's startup sweep walks the langgraph_checkpoints table to log

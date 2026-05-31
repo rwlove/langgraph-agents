@@ -12,11 +12,19 @@ no I/O. `agents.llm.llm()` calls it at the single routing chokepoint, emits the
 decision metric, and lets the existing escalate machinery (cost caps, the
 restricted-tier emission gate) act on the result.
 
-v1 escalates on exactly one capability-driven condition: estimated input size
-exceeds a configured local-context ceiling — the only case where local
-genuinely *cannot* do the work (Layer 6 "context length needed" + Layer 5
-"route to a stronger model"). Everything else stays local. See
-`docs`/the plan for why cascade/destructive/priority triggers are deferred.
+By default it escalates on exactly one capability-driven condition: estimated
+input size exceeds a configured local-context ceiling — the only case where
+local genuinely *cannot* do the work (Layer 6 "context length needed" + Layer 5
+"route to a stronger model"). Everything else stays local.
+
+Two further triggers — `destructive` (Layer 5 "destructive steps get the
+strongest reviewer") and `cascade` (escalate after N supervisor re-routes) —
+ship wired but DISABLED by default (`router_escalate_on_destructive` /
+`router_escalate_on_cascade`). They reverse the enforce-now-conservative
+posture and are gated on ground truth that doesn't exist yet (the fleet routes
+100% local; there's no escalation-rate or failure-provenance signal to tune
+them against). They stay off until that data exists. cascade in particular is a
+weak signal — re-route count is not a local-failure count.
 """
 
 from __future__ import annotations
@@ -55,10 +63,14 @@ class RouteDecision:
     """Result of the scorer. `reason` doubles as the metric label."""
 
     escalate: bool
-    reason: str  # local_default | context_overflow | restricted_pinned_local | scorer_disabled
+    # local_default | context_overflow | restricted_pinned_local | scorer_disabled
+    #   | destructive_escalation | cascade_escalation
+    reason: str
 
 
-def score_route(agent_id: AgentId, group: ModelGroup, settings: Settings) -> RouteDecision:
+def score_route(  # noqa: PLR0911 — returns map 1:1 to documented decision branches
+    agent_id: AgentId, group: ModelGroup, settings: Settings
+) -> RouteDecision:
     """Decide whether `agent_id`'s call should escalate to Claude.
 
     Conservative by construction — returns ``escalate=False`` for everything
@@ -87,5 +99,17 @@ def score_route(agent_id: AgentId, group: ModelGroup, settings: Settings) -> Rou
     est_input_tokens = ctx.get("est_input_tokens", 0)
     if est_input_tokens > settings.router_escalate_token_threshold:
         return RouteDecision(escalate=True, reason="context_overflow")
+
+    # Opt-in triggers (both default OFF). Checked after context_overflow so a
+    # genuinely-overflowing destructive/cascading task reports the stronger
+    # capability reason. Inert until the corresponding flag is flipped per
+    # deployment; restricted-tier data was already pinned local above.
+    if settings.router_escalate_on_destructive and ctx.get("destructive") is True:
+        return RouteDecision(escalate=True, reason="destructive_escalation")
+
+    if settings.router_escalate_on_cascade:
+        cascade_count = ctx.get("cascade_count", 0)
+        if isinstance(cascade_count, int) and cascade_count >= settings.router_cascade_threshold:
+            return RouteDecision(escalate=True, reason="cascade_escalation")
 
     return RouteDecision(escalate=False, reason="local_default")

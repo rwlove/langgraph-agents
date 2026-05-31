@@ -265,6 +265,7 @@ class QueueWorker:
             "user": envelope.get("user", "rob"),
             "data_tier": envelope.get("data_tier", "internal"),
             "est_input_tokens": estimate_input_tokens(envelope.get("content", "")),
+            "destructive": bool(envelope.get("destructive")),
         }
         # trace_id is minted at ingress (api/inbox._ensure_trace_id); bind
         # it so every node + worker log line for this task — and the

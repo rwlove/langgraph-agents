@@ -262,6 +262,7 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
         user=req.user,
         data_tier=req.data_tier,
         est_input_tokens=estimate_input_tokens(req.content),
+        destructive=bool(req.destructive),
     )
     _annotate_current_span(req, queue_task_id)
 
