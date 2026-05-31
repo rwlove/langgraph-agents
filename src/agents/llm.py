@@ -352,6 +352,7 @@ def _build_ollama(
         model=model,
         base_url=base_url,
         temperature=temperature,
+        num_ctx=get_settings().ollama_num_ctx,
         callbacks=callbacks,
     )
 

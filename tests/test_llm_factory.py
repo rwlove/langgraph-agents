@@ -127,6 +127,30 @@ def test_local_p40_returns_chat_ollama_when_p40_healthy(
     assert handler.model == "qwen2.5:7b"
 
 
+def test_ollama_client_sets_num_ctx_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every local client carries num_ctx so prompts aren't silently truncated."""
+    monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+    with patch("agents.llm.service_healthy", return_value=True):
+        model = llm("triager")
+    assert isinstance(model, ChatOllama)
+    assert model.num_ctx == 32768
+
+
+def test_ollama_num_ctx_is_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+    monkeypatch.setenv("OLLAMA_NUM_CTX", "8192")
+    with patch("agents.llm.service_healthy", return_value=True):
+        model = llm("historian")  # local-spark
+    assert isinstance(model, ChatOllama)
+    assert model.num_ctx == 8192
+
+
 def test_local_spark_degrades_to_p40_when_spark_unhealthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
