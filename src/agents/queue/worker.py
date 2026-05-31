@@ -39,6 +39,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import structlog
 from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.propagate import extract
 
 from agents.observability import (
     clear_task_provenance,
@@ -61,6 +63,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("agents.queue.worker")
 slog = get_logger("queue.worker")
+
+
+def _extract_trace_context(envelope: dict[str, Any]) -> Context | None:
+    """Rebuild the ingress OTel context the inbox injected into the envelope.
+
+    Lets this worker's `queue.process` span continue the trace started at
+    /inbox instead of opening an orphan root (the gap recorded in home-ops
+    DoD 2026-05-31). Returns None when the envelope carries no carrier —
+    directly-enqueued tasks (tests, legacy callers) and any backlog
+    enqueued before this fix — so the span cleanly falls back to a root.
+    Guarded so a malformed carrier can never fail task processing.
+    """
+    carrier = envelope.get("otel_carrier")
+    if not isinstance(carrier, dict):
+        return None
+    try:
+        return extract(carrier)
+    except Exception:
+        logger.exception("OTel trace-context extraction failed")
+        return None
 
 
 def _worker_id() -> str:
@@ -278,9 +300,11 @@ class QueueWorker:
         structlog.contextvars.bind_contextvars(**ctx)
 
         # OTel: the FastAPI auto-span is gone (we're not in /inbox
-        # anymore); start a worker-side root span.
+        # anymore). Continue the ingress trace when the envelope carries a
+        # propagated carrier; otherwise start a clean worker-side root span.
         tracer = trace.get_tracer("agents.queue.worker")
-        with tracer.start_as_current_span("queue.process") as span:
+        parent_ctx = _extract_trace_context(envelope)
+        with tracer.start_as_current_span("queue.process", context=parent_ctx) as span:
             for k, v in envelope.items():
                 if v is None or isinstance(v, dict | list):
                     continue

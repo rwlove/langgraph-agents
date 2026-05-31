@@ -28,6 +28,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, HTTPException, Request
 from opentelemetry import trace
+from opentelemetry.propagate import inject
 from pydantic import BaseModel
 
 from agents.idempotency import DedupStore
@@ -164,6 +165,28 @@ def _ensure_trace_id(req: InboxRequest) -> None:
         req.trace_id = secrets.token_hex(16)
 
 
+def _inject_trace_context(envelope: dict[str, Any]) -> None:
+    """Serialize the active OTel context into the envelope for the worker.
+
+    The FastAPI server span is the live root here at ingress, but the
+    worker drains the queue in a *separate* process with no live parent.
+    Without this, the worker's `queue.process` span starts a brand-new
+    trace and every span for the task is orphaned from the ingress root
+    (the gap recorded in home-ops DoD 2026-05-31). We write the W3C
+    trace context (traceparent/tracestate) into ``envelope["otel_carrier"]``;
+    the worker ``extract()``s it back and continues the same trace.
+
+    Guarded — a tracing failure must never block enqueue.
+    """
+    try:
+        carrier: dict[str, str] = {}
+        inject(carrier)
+        if carrier:
+            envelope["otel_carrier"] = carrier
+    except Exception:
+        logger.exception("OTel trace-context injection failed")
+
+
 def _annotate_current_span(req: InboxRequest, queue_task_id: str) -> None:
     """Phase 3.K — set envelope fields as attributes on the active OTel span."""
     try:
@@ -253,6 +276,7 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
 
     _ensure_trace_id(req)
     envelope: dict[str, Any] = req.model_dump(mode="json")
+    _inject_trace_context(envelope)
     queue_task_id = await queue.enqueue(envelope)
 
     structlog.contextvars.bind_contextvars(
