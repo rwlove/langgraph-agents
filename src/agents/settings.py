@@ -260,12 +260,25 @@ class Settings(BaseSettings):
         default=24000,
         description=(
             "Estimated assembled-prompt tokens above which the scorer escalates "
-            "to Claude (reason=context_overflow). Deliberately high: the local "
-            "ChatOllama clients set no num_ctx so the real local ceiling is "
-            "Ollama's runtime default, and conservative-on-cost means only a "
+            "to Claude (reason=context_overflow). Deliberately high: only a "
             "genuine overflow (e.g. a pasted multi-thousand-line log) trips it. "
-            "Lower it once langgraph_router_decision_total shows real overflow "
-            "rates. Cost caps remain the hard floor regardless."
+            "Must stay <= ollama_num_ctx so a prompt the scorer keeps local "
+            "actually fits the local KV cache instead of being silently "
+            "truncated. Lower it once langgraph_router_decision_total shows real "
+            "overflow rates. Cost caps remain the hard floor regardless."
+        ),
+    )
+    ollama_num_ctx: int = Field(
+        default=32768,
+        description=(
+            "num_ctx applied to every local ChatOllama client. Without it Ollama "
+            "caps each prompt at its small runtime default (~4096), silently "
+            "truncating anything larger -- including prompts the router scorer "
+            "deliberately keeps local (threshold 24000). Set to qwen2.5's native "
+            "32768 so the local ceiling matches the scorer's assumption. Sized to "
+            "fit: qwen2.5:7b on the P40 (24GB, shared with embedders) and "
+            "qwen2.5:32b on the Spark (128GB unified) both hold a 32k KV cache "
+            "with headroom. Keep >= router_escalate_token_threshold."
         ),
     )
 
