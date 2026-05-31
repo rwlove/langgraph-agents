@@ -41,9 +41,11 @@ import structlog
 from opentelemetry import trace
 
 from agents.observability import (
+    clear_task_provenance,
     get_logger,
     langgraph_awaiting_approval_oldest_age_seconds,
     langgraph_awaiting_approval_tasks,
+    served_groups_for,
 )
 from agents.queue.approval_post import has_pending_approval, post_approval_for_interrupts
 from agents.router import estimate_input_tokens
@@ -327,9 +329,7 @@ class QueueWorker:
             # Park the durable row at `awaiting_approval` with the Layer 5
             # guardian TTL. The /approval resume path acks it `done`; the
             # guardian sweep expires it to the DLQ if Rob never answers.
-            await self._queue.park_for_approval(
-                task_id, self._approval_deadline(envelope)
-            )
+            await self._queue.park_for_approval(task_id, self._approval_deadline(envelope))
             return
 
         await self._ack_with_result(task_id, output)
@@ -421,9 +421,7 @@ class QueueWorker:
         # routed differently than the requester guessed).
         target_agent: str | None = None
         try:
-            snapshot = await self._graph.aget_state(
-                {"configurable": {"thread_id": task_id}}
-            )
+            snapshot = await self._graph.aget_state({"configurable": {"thread_id": task_id}})
             if snapshot and snapshot.values:
                 target_agent = snapshot.values.get("target_agent")
         except Exception:
@@ -480,21 +478,35 @@ class QueueWorker:
         return datetime.now(UTC) + timedelta(seconds=int(ttl_seconds))
 
     async def _ack_with_result(self, task_id: str, output: str | None) -> None:
-        """Mark task done and store the output for `/admin/tasks/<id>` retrieval."""
+        """Mark task done and store the output for `/admin/tasks/<id>` retrieval.
+
+        Also drains the process-local model-group provenance accumulated for
+        this task (recorded in ``agents.llm`` at each model-build site) onto
+        the row, so the cost breakdown reports the group(s) that ACTUALLY
+        served — including runtime escalation / Spark-down degrade — rather
+        than deriving from the static AGENT_GROUP map. Empty (e.g. accumulator
+        lost to a pod restart mid-task) writes NULL, and the read path falls
+        back to AGENT_GROUP for NULL rows.
+        """
         result_payload = json.dumps({"output": output}) if output is not None else None
+        served = served_groups_for(task_id)
+        served_payload = json.dumps(served) if served else None
         async with self._pool.connection() as conn:
             await conn.execute(
                 """
                 UPDATE task_queue
                 SET status = 'done',
                     result = %s::jsonb,
+                    served_groups = %s::jsonb,
                     updated_at = NOW()
                 WHERE id = %s
                 """,
-                (result_payload, task_id),
+                (result_payload, served_payload, task_id),
             )
+        clear_task_provenance(task_id)
         slog.info(
             "task_completed",
             task_id=task_id,
             has_output=output is not None,
+            served_groups=served,
         )

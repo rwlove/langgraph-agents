@@ -321,42 +321,69 @@ async def cancel_task(task_id: str, body: CancelBody, request: Request) -> dict[
 # ---- task usage stats ----
 
 
-def _group_breakdown(by_agent: dict[str, int]) -> tuple[dict[str, int], dict[str, int]]:
-    """Split per-agent completion counts into local-vs-escalated by model group.
+# Precedence for collapsing a task's distinct served groups to ONE
+# representative group, so ``by_group`` counts each task once and its
+# values still sum to ``total_tasks``. "Most escalated wins": a task that
+# ran some nodes local and escalated others is attributed to ``claude``;
+# among locals, the strongest model that served wins. Groups not listed
+# sort last (least-escalated), so an unknown future group never masks a
+# real escalation.
+_GROUP_PRECEDENCE = ["claude", "local-spark-coder", "local-spark", "local-p40"]
 
-    The model group is NOT persisted per-completion — only ``target_agent``
-    is (see ``UsageStats``). We derive the group from the static
-    ``AGENT_GROUP`` map: ``claude`` → escalated, every ``local-*`` group →
-    local. This reflects each agent's *configured* group, not runtime
-    routing — a Spark-down degrade to P40 or an ``escalate=True`` override
-    isn't captured here because that provenance never lands on the row.
-    Agents missing from the map (e.g. the ``"(unknown)"`` bucket) count as
-    ``"(unknown)"`` rather than being silently dropped.
 
-    Today no agent is statically pinned to ``claude`` (escalation is purely
-    a runtime decision), so ``escalated`` will read 0 from this data source —
-    the ``claude`` branch exists so the split is correct the moment either an
-    agent is pinned to ``claude`` or escalation provenance starts landing on
-    the task row.
+def _representative_group(served: list[str]) -> str:
+    """Pick the single representative group from a task's distinct served set.
 
-    Returns ``(by_group, by_tier)`` where ``by_group`` keys on the
-    ``AGENT_GROUP`` group name and ``by_tier`` keys on
-    ``local`` / ``escalated`` / ``(unknown)``.
+    Highest-precedence (most escalated) group wins; unknown groups rank
+    below all known ones. Caller guarantees ``served`` is non-empty.
     """
-    # AGENT_GROUP is keyed on the AgentId Literal; by_agent keys are plain
-    # strs (they include the synthetic "(unknown)" bucket), so look up via a
-    # cast and treat any miss as unknown.
+
+    def rank(g: str) -> int:
+        return _GROUP_PRECEDENCE.index(g) if g in _GROUP_PRECEDENCE else len(_GROUP_PRECEDENCE)
+
+    return min(served, key=rank)
+
+
+def _group_breakdown(
+    rows: list[tuple[str, list[str] | None, int]],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Split completion counts into local-vs-escalated by model group.
+
+    Each row is ``(agent, served_groups, count)``. ``served_groups`` is the
+    real per-completion provenance the worker stamped on the row (the
+    distinct ``effective_group`` set that actually served the task — so a
+    runtime ``escalate=True`` or a Spark-down degrade IS reflected). When it
+    is ``None`` (rows completed before the provenance migration, or where the
+    process-local accumulator was lost to a mid-task restart) we fall back to
+    the static ``AGENT_GROUP`` map for that agent — degrading to the old
+    *configured-group* behavior rather than dropping the row.
+
+    A task that touched several groups is counted once under its
+    representative group (see ``_representative_group``) so ``by_group`` sums
+    to ``total_tasks``. ``by_tier`` keys on ``local`` / ``escalated`` /
+    ``(unknown)``; ``escalated`` means Claude actually served at least one of
+    the task's calls.
+
+    Returns ``(by_group, by_tier)``.
+    """
+    # AGENT_GROUP is keyed on the AgentId Literal; agent keys are plain strs
+    # (they include the synthetic "(unknown)" bucket), so look up via a cast
+    # and treat any miss as unknown.
     group_for: dict[str, str] = {str(a): g for a, g in AGENT_GROUP.items()}
     by_group: dict[str, int] = {}
     by_tier: dict[str, int] = {}
-    for agent, count in by_agent.items():
-        group = group_for.get(agent)
-        if group is None:
-            group_key = "(unknown)"
-            tier = "(unknown)"
+    for agent, served, count in rows:
+        if served:
+            group_key = _representative_group(served)
+            tier = "escalated" if "claude" in served else "local"
         else:
-            group_key = group
-            tier = "escalated" if group == "claude" else "local"
+            group = group_for.get(agent)
+            if group is None:
+                group_key = "(unknown)"
+                tier = "(unknown)"
+            else:
+                group_key = group
+                tier = "escalated" if group == "claude" else "local"
         by_group[group_key] = by_group.get(group_key, 0) + count
         by_tier[tier] = by_tier.get(tier, 0) + count
     return (
@@ -374,10 +401,11 @@ class UsageStats(BaseModel):
     almost always carry it. The rare ``""`` / missing value is grouped
     under ``"(unknown)"``.
 
-    by_group and by_tier are derived from ``by_agent`` via the static
-    ``AGENT_GROUP`` map (see ``_group_breakdown``). They report the
-    *configured* model group per agent — runtime escalations / degrades
-    aren't persisted, so they're not reflected here.
+    by_group and by_tier come from the per-completion ``served_groups``
+    provenance the worker stamps on each row (see ``_group_breakdown``) —
+    so runtime escalations and Spark-down degrades ARE reflected. Rows
+    without provenance (pre-migration, or accumulator lost to a mid-task
+    restart) fall back to the static ``AGENT_GROUP`` map for that agent.
     """
 
     days: int
@@ -414,11 +442,12 @@ async def get_usage_stats(request: Request, days: int = 7) -> UsageStats:
             SELECT
                 COALESCE(NULLIF(envelope->>'target_agent', ''), '(unknown)') AS agent,
                 COALESCE(NULLIF(envelope->>'source', ''), '(unknown)') AS source,
+                served_groups,
                 COUNT(*) AS cnt
             FROM task_queue
             WHERE status = 'done'
               AND created_at > NOW() - make_interval(days => %s)
-            GROUP BY agent, source
+            GROUP BY agent, source, served_groups
             """,
             (days,),
         )
@@ -426,15 +455,19 @@ async def get_usage_stats(request: Request, days: int = 7) -> UsageStats:
 
     by_agent: dict[str, int] = {}
     by_source: dict[str, int] = {}
+    # (agent, served_groups, count) rows for the local-vs-escalated breakdown.
+    breakdown_rows: list[tuple[str, list[str] | None, int]] = []
     total = 0
-    for agent, source, cnt in rows:
+    for agent, source, served_groups, cnt in rows:
         n = int(cnt)
         by_agent[agent] = by_agent.get(agent, 0) + n
         by_source[source] = by_source.get(source, 0) + n
+        served = served_groups if isinstance(served_groups, list) else None
+        breakdown_rows.append((agent, served, n))
         total += n
 
     sorted_by_agent = dict(sorted(by_agent.items(), key=lambda x: x[1], reverse=True))
-    by_group, by_tier = _group_breakdown(sorted_by_agent)
+    by_group, by_tier = _group_breakdown(breakdown_rows)
 
     return UsageStats(
         days=days,
@@ -767,9 +800,7 @@ class SmokeStartResponse(BaseModel):
 
 
 @router.post("/smoke/start-approval", response_model=SmokeStartResponse)
-async def start_smoke_approval(
-    req: SmokeStartRequest, request: Request
-) -> SmokeStartResponse:
+async def start_smoke_approval(req: SmokeStartRequest, request: Request) -> SmokeStartResponse:
     """Start a smoke-test approval flow run.
 
     Constructs a synthetic ApprovalRequest targeting the `smoke.test_write`

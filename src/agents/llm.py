@@ -36,6 +36,7 @@ from agents.observability import (
     global_claude_spend_usd,
     langfuse_callback_handler,
     langgraph_router_decision_total,
+    record_served_group,
     task_spend_usd,
 )
 from agents.redaction import assert_emission_allowed
@@ -308,6 +309,17 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
     raise LocalOllamaUnavailable(group, agent_id, failed_group="local-p40")
 
 
+def _record_provenance(effective_group: ModelGroup) -> None:
+    """Record the actually-serving group onto the current task's provenance set.
+
+    Reads ``task_id`` from structlog contextvars (bound at /inbox + the queue
+    worker). Unbound — scheduled-job / test paths — is a silent no-op. The
+    accumulator is drained onto the task_queue row by the worker at ack.
+    """
+    bound = structlog.contextvars.get_contextvars().get("task_id")
+    record_served_group(bound if isinstance(bound, str) else None, effective_group)
+
+
 def _build_ollama(
     base_url: str,
     model: str,
@@ -340,6 +352,7 @@ def _build_ollama(
     callback, so we don't use that pattern.
     """
     base_url = base_url.removesuffix("/v1").rstrip("/")
+    _record_provenance(effective_group)
     callbacks: list[BaseCallbackHandler] = [
         LangGraphMetricsCallback(
             agent=agent_id, group=effective_group, model=model, trigger=trigger
@@ -432,6 +445,10 @@ def _build_claude(
                 agent_id=agent_id,
             )
 
+    # Cap checks above raise before we get here, so recording at this point
+    # means Claude is actually being handed out for this call — not merely
+    # requested-then-blocked.
+    _record_provenance(effective_group)
     callbacks: list[BaseCallbackHandler] = [
         LangGraphMetricsCallback(
             agent=agent_id,
