@@ -247,6 +247,46 @@ def test_escalate_true_returns_claude_when_key_set(
     assert isinstance(model, ChatAnthropic)
 
 
+def test_master_switch_off_blocks_escalation_degrades_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ENABLE_CLAUDE_API=false refuses escalation even with a key set + escalate=True;
+    the request degrades to the local group instead of touching Claude."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ENABLE_CLAUDE_API", "false")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+    with patch("agents.llm.service_healthy", return_value=True):
+        model = llm("coder", escalate=True)  # coder is local-spark-coder
+    assert isinstance(model, ChatOllama)
+
+
+def test_master_switch_off_raises_on_explicit_claude_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit group_override='claude' cannot be satisfied with the master
+    switch off — it raises rather than silently degrading."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ENABLE_CLAUDE_API", "false")
+    with patch("agents.llm.service_healthy", return_value=True):
+        with pytest.raises(RuntimeError, match="ENABLE_CLAUDE_API is false"):
+            llm("coder", group_override="claude")
+
+
+def test_master_switch_off_blocks_degraded_mode_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even with degraded-mode escalation enabled and both local paths down,
+    the master switch off forces LocalOllamaUnavailable instead of Claude."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ENABLE_CLAUDE_API", "false")
+    monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+    monkeypatch.setenv("DEGRADED_MODE_ESCALATION_ENABLED", "true")
+    with patch("agents.llm.service_healthy", return_value=False):
+        with pytest.raises(LocalOllamaUnavailable):
+            llm("coder")
+
+
 def test_degraded_mode_escalation_routes_to_claude_when_both_local_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
