@@ -308,9 +308,9 @@ def _render_cost_table(data: dict[str, Any]) -> None:
                 print(f"  {group:28s}  {count:>6d}")
         print()
         print(
-            "# group derived from each agent's static AGENT_GROUP; runtime escalations\n"
-            "# to Claude (escalate=True / group_override) are NOT persisted per-completion,\n"
-            "# so 'escalated' undercounts until that provenance lands on the task row."
+            "# group from per-completion provenance (served_groups on the task row):\n"
+            "# runtime escalations to Claude and Spark-down degrades ARE reflected.\n"
+            "# Rows with no recorded provenance fall back to the static AGENT_GROUP map."
         )
 
 
@@ -390,9 +390,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     p_task_tail.set_defaults(func=cmd_task_tail)
 
     p_task_ls = s_task.add_parser("ls", help="list recent tasks (table format)")
-    p_task_ls.add_argument(
-        "--json", action="store_true", help="emit raw JSON instead of the table"
-    )
+    p_task_ls.add_argument("--json", action="store_true", help="emit raw JSON instead of the table")
     p_task_ls.set_defaults(func=cmd_task_ls)
 
     p_task_show = s_task.add_parser("show", help="show one task's full state")
@@ -400,9 +398,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     p_task_show.set_defaults(func=cmd_task_show)
 
     # awaiting — tasks paused for the user's input
-    p_awaiting = sub.add_parser(
-        "awaiting", help="show only tasks needing user input (interrupts)"
-    )
+    p_awaiting = sub.add_parser("awaiting", help="show only tasks needing user input (interrupts)")
     p_awaiting.add_argument("--json", action="store_true", help="emit raw JSON")
     p_awaiting.set_defaults(func=cmd_awaiting)
 
@@ -410,9 +406,7 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     p_completed = sub.add_parser(
         "completed", help="show only completed tasks (queue done, no pending interrupt)"
     )
-    p_completed.add_argument(
-        "--limit", type=int, default=20, help="max rows to show (default 20)"
-    )
+    p_completed.add_argument("--limit", type=int, default=20, help="max rows to show (default 20)")
     p_completed.add_argument("--json", action="store_true", help="emit raw JSON")
     p_completed.set_defaults(func=cmd_completed)
 

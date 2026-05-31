@@ -362,9 +362,7 @@ def test_list_tasks_does_not_call_aget_state_inside_alist_iteration(
     asyncio.Lock so the test fails LOUDLY (AssertionError) instead of
     hanging if the handler regresses to the combined loop.
     """
-    cps = [
-        MagicMock(config={"configurable": {"thread_id": f"t-{i}"}}) for i in range(3)
-    ]
+    cps = [MagicMock(config={"configurable": {"thread_id": f"t-{i}"}}) for i in range(3)]
 
     alist_iterating = False
 
@@ -533,12 +531,17 @@ def test_list_tasks_status_filter_503_when_queue_unwired(temp_vault: Path) -> No
 # ---- usage-stats group breakdown (hai cost local-vs-escalated split) ----
 
 
-def test_group_breakdown_splits_local_vs_escalated() -> None:
-    """_group_breakdown maps agents to their static AGENT_GROUP tier."""
-    # triager/note-maker/errand-runner → local-p40; researcher → local-spark;
+def test_group_breakdown_fallback_splits_local_vs_escalated() -> None:
+    """Rows with no provenance (served=None) map agents to static AGENT_GROUP."""
+    # triager/note-maker → local-p40; researcher → local-spark;
     # coder → local-spark-coder. None are claude, so all are local.
-    by_agent = {"triager": 10, "researcher": 5, "coder": 3, "note-maker": 2}
-    by_group, by_tier = admin._group_breakdown(by_agent)
+    rows: list[tuple[str, list[str] | None, int]] = [
+        ("triager", None, 10),
+        ("researcher", None, 5),
+        ("coder", None, 3),
+        ("note-maker", None, 2),
+    ]
+    by_group, by_tier = admin._group_breakdown(rows)
 
     assert by_tier == {"local": 20}
     # local-p40 = triager(10) + note-maker(2) = 12; spark = 5; coder = 3
@@ -547,20 +550,28 @@ def test_group_breakdown_splits_local_vs_escalated() -> None:
 
 def test_group_breakdown_unknown_agent_bucketed_not_dropped() -> None:
     """Agents absent from AGENT_GROUP (incl. the (unknown) bucket) count as (unknown)."""
-    by_agent = {"triager": 4, "(unknown)": 3, "not-a-real-agent": 1}
-    by_group, by_tier = admin._group_breakdown(by_agent)
+    rows: list[tuple[str, list[str] | None, int]] = [
+        ("triager", None, 4),
+        ("(unknown)", None, 3),
+        ("not-a-real-agent", None, 1),
+    ]
+    by_group, by_tier = admin._group_breakdown(rows)
 
     assert by_tier == {"local": 4, "(unknown)": 4}
     assert by_group["local-p40"] == 4
     assert by_group["(unknown)"] == 4
     # total preserved — nothing dropped
-    assert sum(by_tier.values()) == sum(by_agent.values())
+    assert sum(by_tier.values()) == sum(n for _, _, n in rows)
 
 
 def test_group_breakdown_sorted_descending() -> None:
     """Both maps are sorted by count descending, matching by_agent/by_source."""
-    by_agent = {"note-maker": 1, "researcher": 9, "triager": 4}
-    by_group, by_tier = admin._group_breakdown(by_agent)
+    rows: list[tuple[str, list[str] | None, int]] = [
+        ("note-maker", None, 1),
+        ("researcher", None, 9),
+        ("triager", None, 4),
+    ]
+    by_group, by_tier = admin._group_breakdown(rows)
 
     assert list(by_group.values()) == sorted(by_group.values(), reverse=True)
     assert list(by_tier.values()) == sorted(by_tier.values(), reverse=True)
@@ -568,17 +579,52 @@ def test_group_breakdown_sorted_descending() -> None:
 
 def test_group_breakdown_empty() -> None:
     """No completions → empty breakdowns, no crash."""
-    assert admin._group_breakdown({}) == ({}, {})
+    assert admin._group_breakdown([]) == ({}, {})
 
 
-def test_group_breakdown_claude_pinned_agent_is_escalated(monkeypatch: Any) -> None:
-    """If an agent is pinned to the claude group, it counts as escalated.
-
-    No agent is statically pinned to claude today (escalation is runtime),
-    so we patch the map to prove the escalated branch is wired correctly.
-    """
+def test_group_breakdown_fallback_claude_pinned_agent_is_escalated(monkeypatch: Any) -> None:
+    """With no provenance, a claude-pinned agent counts as escalated via AGENT_GROUP."""
     monkeypatch.setitem(admin.AGENT_GROUP, "researcher", "claude")
-    by_group, by_tier = admin._group_breakdown({"researcher": 7, "triager": 2})
+    rows: list[tuple[str, list[str] | None, int]] = [
+        ("researcher", None, 7),
+        ("triager", None, 2),
+    ]
+    by_group, by_tier = admin._group_breakdown(rows)
 
     assert by_tier == {"escalated": 7, "local": 2}
     assert by_group["claude"] == 7
+
+
+def test_group_breakdown_real_provenance_escalation_overrides_static_map() -> None:
+    """A locally-configured agent that actually escalated counts as escalated.
+
+    triager is statically local-p40, but its served_groups say claude served —
+    real provenance must win over the AGENT_GROUP fallback.
+    """
+    rows: list[tuple[str, list[str] | None, int]] = [
+        ("triager", ["claude"], 4),
+        ("note-maker", ["local-p40"], 6),
+    ]
+    by_group, by_tier = admin._group_breakdown(rows)
+
+    assert by_tier == {"local": 6, "escalated": 4}
+    assert by_group == {"local-p40": 6, "claude": 4}
+
+
+def test_group_breakdown_multi_group_task_counted_once_under_representative() -> None:
+    """A task spanning groups is escalated if claude served, counted once.
+
+    by_group must still sum to the total even though the task touched two
+    groups — the representative (most-escalated) group wins.
+    """
+    rows: list[tuple[str, list[str] | None, int]] = [
+        ("triager", ["claude", "local-p40"], 3),
+        ("researcher", ["local-p40", "local-spark"], 5),
+    ]
+    by_group, by_tier = admin._group_breakdown(rows)
+
+    # claude served the first group → escalated; second is purely local,
+    # representative is the stronger local-spark.
+    assert by_tier == {"local": 5, "escalated": 3}
+    assert by_group == {"local-spark": 5, "claude": 3}
+    assert sum(by_group.values()) == sum(n for _, _, n in rows)

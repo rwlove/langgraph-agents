@@ -470,6 +470,63 @@ def _reset_cost_accumulators() -> None:
     """
     _task_spend.clear()
     _agent_daily_spend.clear()
+    _task_served_groups.clear()
+
+
+# ---------------------------------------------------------------------------
+# Per-task model-group provenance (completion-provenance follow-up).
+#
+# Process-local dict recording the DISTINCT set of `effective_group`
+# values that served each task's LLM calls, keyed by the `task_id`
+# structlog contextvar. Written from ``agents.llm`` at each model-build
+# site (so a Spark-down degrade or an escalate=True override is captured
+# as the group that ACTUALLY served, not the one configured in
+# AGENT_GROUP). Read + persisted onto the task_queue row by the queue
+# worker at ack, then cleared.
+#
+# Same caveats as the cost accumulators above: process-local; lost on
+# pod restart; no cross-replica view. The Recreate strategy + single
+# replica makes that acceptable, and the read path (``/admin/cost``)
+# falls back to AGENT_GROUP for rows with no recorded provenance, so a
+# lost accumulator degrades to the old static behavior rather than to
+# wrong data.
+# ---------------------------------------------------------------------------
+
+_task_served_groups: dict[str, set[str]] = {}
+
+
+def record_served_group(task_id: str | None, group: str) -> None:
+    """Record that ``group`` served an LLM call for ``task_id``.
+
+    No-op when ``task_id`` is ``None`` (no contextvar bound — e.g. a
+    scheduled-job or test path). Accumulates a distinct set per task;
+    the worker drains it at ack via ``served_groups_for`` +
+    ``clear_task_provenance``.
+    """
+    if task_id is None:
+        return
+    _task_served_groups.setdefault(task_id, set()).add(group)
+
+
+def served_groups_for(task_id: str | None) -> list[str]:
+    """Return the sorted distinct groups recorded for ``task_id``.
+
+    Empty list when ``task_id`` is ``None`` or untracked — the worker
+    treats that as "no provenance" and writes SQL NULL, which the read
+    path resolves via the AGENT_GROUP fallback.
+    """
+    if task_id is None:
+        return []
+    return sorted(_task_served_groups.get(task_id, set()))
+
+
+def clear_task_provenance(task_id: str | None) -> None:
+    """Drop the recorded provenance for ``task_id`` (called by the worker
+    after persisting it). No-op when ``task_id`` is ``None`` or absent.
+    """
+    if task_id is None:
+        return
+    _task_served_groups.pop(task_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -662,9 +719,7 @@ def langfuse_callback_handler(agent_id: str | None = None) -> BaseCallbackHandle
         try:
             trace_id = UUID(int=int(ULID.from_str(str(task_id)))).hex
         except Exception:
-            _LANGFUSE_LOGGER.warning(
-                "langfuse_trace_id_conversion_failed task_id=%s", task_id
-            )
+            _LANGFUSE_LOGGER.warning("langfuse_trace_id_conversion_failed task_id=%s", task_id)
     trace_context: TraceContext | None = TraceContext(trace_id=trace_id) if trace_id else None
     return LangfuseLangchainCallback(trace_context=trace_context)
 
