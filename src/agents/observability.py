@@ -154,6 +154,18 @@ langgraph_inbox_envelope_rejected_total = Counter(
     ("reason",),
 )
 
+# Router scorer local-vs-escalate decisions (HOMELAB-SPEC Layer 6). Emitted
+# once per llm() call from the routing chokepoint. `decision` is
+# escalate|local; `reason` is the scorer's RouteDecision.reason slug
+# (local_default, context_overflow, restricted_pinned_local, scorer_disabled).
+# Ground truth for whether the conservative escalation bar ever trips — the
+# signal future tightening is decided from.
+langgraph_router_decision_total = Counter(
+    "langgraph_router_decision_total",
+    "Router scorer local-vs-escalate decisions.",
+    ("agent", "decision", "reason"),
+)
+
 langgraph_llm_duration_seconds = Histogram(
     "langgraph_llm_duration_seconds",
     "Wall-clock duration of LLM invocations.",

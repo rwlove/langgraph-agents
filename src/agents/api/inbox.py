@@ -35,6 +35,7 @@ from agents.observability import (
     get_logger,
     langgraph_inbox_envelope_rejected_total,
 )
+from agents.router import estimate_input_tokens
 from agents.settings import get_settings
 from agents.state import (
     ALL_AGENT_IDS,
@@ -260,6 +261,7 @@ async def post_inbox(req: InboxRequest, request: Request) -> InboxResponse:
         source=req.source,
         user=req.user,
         data_tier=req.data_tier,
+        est_input_tokens=estimate_input_tokens(req.content),
     )
     _annotate_current_span(req, queue_task_id)
 
