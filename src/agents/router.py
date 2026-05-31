@@ -96,8 +96,17 @@ def score_route(  # noqa: PLR0911 — returns map 1:1 to documented decision bra
 
     # The one capability-driven trigger. Unbound (directly-enqueued tasks,
     # tests, legacy callers that never hit /inbox) reads as 0 -> stays local.
+    # The bar is per-group: the P40's KV cache is smaller than the Spark's, so
+    # a prompt that overflows the P40 (and must escalate) still fits the Spark.
+    # `group == "claude"` already returned above, so group is one of the three
+    # local groups here.
     est_input_tokens = ctx.get("est_input_tokens", 0)
-    if est_input_tokens > settings.router_escalate_token_threshold:
+    threshold = (
+        settings.router_escalate_token_threshold_p40
+        if group == "local-p40"
+        else settings.router_escalate_token_threshold_spark
+    )
+    if est_input_tokens > threshold:
         return RouteDecision(escalate=True, reason="context_overflow")
 
     # Opt-in triggers (both default OFF). Checked after context_overflow so a

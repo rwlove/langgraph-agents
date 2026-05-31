@@ -309,6 +309,19 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
     raise LocalOllamaUnavailable(group, agent_id, failed_group="local-p40")
 
 
+def _num_ctx_for_group(group: ModelGroup, settings: Settings) -> int:
+    """KV-cache size for the group ACTUALLY serving the request.
+
+    The P40 and the Spark have very different VRAM budgets, so each local group
+    carries its own num_ctx (see Settings.ollama_num_ctx_*). Called with the
+    *effective* group — a `local-spark` request that degraded to the P40 arrives
+    here as `local-p40` and correctly gets the smaller, VRAM-safe ceiling.
+    """
+    if group == "local-p40":
+        return settings.ollama_num_ctx_p40
+    return settings.ollama_num_ctx_spark
+
+
 def _record_provenance(effective_group: ModelGroup) -> None:
     """Record the actually-serving group onto the current task's provenance set.
 
@@ -365,7 +378,7 @@ def _build_ollama(
         model=model,
         base_url=base_url,
         temperature=temperature,
-        num_ctx=get_settings().ollama_num_ctx,
+        num_ctx=_num_ctx_for_group(effective_group, get_settings()),
         callbacks=callbacks,
     )
 
