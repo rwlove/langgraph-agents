@@ -127,28 +127,60 @@ def test_local_p40_returns_chat_ollama_when_p40_healthy(
     assert handler.model == "qwen2.5:7b"
 
 
-def test_ollama_client_sets_num_ctx_default(
+def test_ollama_num_ctx_is_per_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every local client carries num_ctx so prompts aren't silently truncated."""
+    """Each group carries its own VRAM-safe num_ctx so prompts aren't truncated.
+
+    The P40 (24GB, shared by five GPU pods) gets the smaller 16384 ceiling; the
+    Spark (128GB unified) holds the model's full 32768.
+    """
     monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
     with patch("agents.llm.service_healthy", return_value=True):
-        model = llm("triager")
-    assert isinstance(model, ChatOllama)
-    assert model.num_ctx == 32768
+        p40_model = llm("triager")  # local-p40
+        spark_model = llm("historian")  # local-spark
+    assert isinstance(p40_model, ChatOllama)
+    assert isinstance(spark_model, ChatOllama)
+    assert p40_model.num_ctx == 16384
+    assert spark_model.num_ctx == 32768
 
 
-def test_ollama_num_ctx_is_configurable(
+def test_ollama_num_ctx_is_configurable_per_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
-    monkeypatch.setenv("OLLAMA_NUM_CTX", "8192")
+    monkeypatch.setenv("OLLAMA_NUM_CTX_P40", "8192")
+    monkeypatch.setenv("OLLAMA_NUM_CTX_SPARK", "20000")
     with patch("agents.llm.service_healthy", return_value=True):
-        model = llm("historian")  # local-spark
+        p40_model = llm("triager")  # local-p40
+        spark_model = llm("historian")  # local-spark
+    assert isinstance(p40_model, ChatOllama)
+    assert isinstance(spark_model, ChatOllama)
+    assert p40_model.num_ctx == 8192
+    assert spark_model.num_ctx == 20000
+
+
+def test_spark_degraded_to_p40_uses_p40_num_ctx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Spark request that degrades to the P40 must adopt the P40's num_ctx.
+
+    The KV cache is sized for the GPU actually serving — degraded routing must
+    not load a 32k cache onto the VRAM-constrained P40.
+    """
+    monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+
+    def _health(url: str, *, ttl_seconds: float = 60.0) -> bool:
+        return "p40.test" in url  # P40 up, Spark down
+
+    with patch("agents.llm.service_healthy", side_effect=_health):
+        model = llm("historian")  # local-spark, degrades to P40
     assert isinstance(model, ChatOllama)
-    assert model.num_ctx == 8192
+    assert "p40.test" in model.base_url
+    assert model.num_ctx == 16384  # P40 ceiling, not the Spark's 32768
 
 
 def test_local_spark_degrades_to_p40_when_spark_unhealthy(

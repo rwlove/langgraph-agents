@@ -256,29 +256,58 @@ class Settings(BaseSettings):
             "capability-driven bar. Set False to pin the fleet 100% local."
         ),
     )
-    router_escalate_token_threshold: int = Field(
+    # Per-group local-context ceilings. The P40 and the Spark have very
+    # different VRAM budgets, so each model group gets its own KV-cache size
+    # (ollama_num_ctx_*) AND its own escalation bar (router_escalate_token_*).
+    # The invariant is per-group: router_escalate_token_threshold_<g> must stay
+    # <= ollama_num_ctx_<g>, so a prompt the scorer keeps local on group <g>
+    # actually fits that group's KV cache instead of being silently truncated.
+    # A single global threshold cannot satisfy both groups at once — it would
+    # either truncate P40 prompts (if set for the Spark) or escalate Spark
+    # prompts the 32b model could handle locally (if set for the P40).
+    router_escalate_token_threshold_p40: int = Field(
+        default=12000,
+        description=(
+            "Estimated assembled-prompt tokens above which the scorer escalates "
+            "a local-p40 (qwen2.5:7b) call to Claude (reason=context_overflow). "
+            "Lower than the Spark bar because the P40's VRAM-safe KV cache is "
+            "smaller (ollama_num_ctx_p40=16384). Must stay <= ollama_num_ctx_p40. "
+            "Light/mechanical agents live here and rarely see prompts this large, "
+            "so escalation is rare. Cost caps remain the hard floor regardless."
+        ),
+    )
+    router_escalate_token_threshold_spark: int = Field(
         default=24000,
         description=(
             "Estimated assembled-prompt tokens above which the scorer escalates "
-            "to Claude (reason=context_overflow). Deliberately high: only a "
-            "genuine overflow (e.g. a pasted multi-thousand-line log) trips it. "
-            "Must stay <= ollama_num_ctx so a prompt the scorer keeps local "
-            "actually fits the local KV cache instead of being silently "
-            "truncated. Lower it once langgraph_router_decision_total shows real "
-            "overflow rates. Cost caps remain the hard floor regardless."
+            "a local-spark / local-spark-coder (qwen2.5:32b) call to Claude "
+            "(reason=context_overflow). Deliberately high: only a genuine "
+            "overflow (e.g. a pasted multi-thousand-line log) trips it. Must "
+            "stay <= ollama_num_ctx_spark (32768). Lower it once "
+            "langgraph_router_decision_total shows real overflow rates."
         ),
     )
-    ollama_num_ctx: int = Field(
+    ollama_num_ctx_p40: int = Field(
+        default=16384,
+        description=(
+            "num_ctx for the P40-served local group (qwen2.5:7b). Sized for VRAM "
+            "safety: the P40 (24GB) is shared by five GPU pods (Ollama, ComfyUI, "
+            "Whisper, and two Immich ML workers), leaving only ~6GB free. A 32k "
+            "KV cache (~1.9GB on top of the 7b's ~4.7GB weights) risks OOM under "
+            "a ComfyUI burst; 16384 (~0.95GB KV) keeps a safe margin. Without any "
+            "num_ctx Ollama caps prompts at its small runtime default (~4096) and "
+            "silently truncates anything larger. Keep >= "
+            "router_escalate_token_threshold_p40."
+        ),
+    )
+    ollama_num_ctx_spark: int = Field(
         default=32768,
         description=(
-            "num_ctx applied to every local ChatOllama client. Without it Ollama "
-            "caps each prompt at its small runtime default (~4096), silently "
-            "truncating anything larger -- including prompts the router scorer "
-            "deliberately keeps local (threshold 24000). Set to qwen2.5's native "
-            "32768 so the local ceiling matches the scorer's assumption. Sized to "
-            "fit: qwen2.5:7b on the P40 (24GB, shared with embedders) and "
-            "qwen2.5:32b on the Spark (128GB unified) both hold a 32k KV cache "
-            "with headroom. Keep >= router_escalate_token_threshold."
+            "num_ctx for the Spark-served local groups (qwen2.5:32b, "
+            "qwen2.5-coder:32b). The Spark's 128GB unified memory holds qwen2.5's "
+            "native 32768-token KV cache with ample headroom, so this stays at "
+            "the model's full context. Keep >= "
+            "router_escalate_token_threshold_spark."
         ),
     )
     router_escalate_on_destructive: bool = Field(

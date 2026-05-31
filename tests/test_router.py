@@ -48,13 +48,20 @@ def _settings(
     *,
     enabled: bool = True,
     threshold: int = 1000,
+    threshold_p40: int | None = None,
     on_destructive: bool = False,
     on_cascade: bool = False,
     cascade_threshold: int = 2,
 ) -> Settings:
+    # `threshold` sets BOTH per-group bars by default so the single-threshold
+    # matrix below is group-agnostic; `threshold_p40` overrides just the P40 bar
+    # for the per-group differentiation cases.
     return Settings(
         router_scorer_enabled=enabled,
-        router_escalate_token_threshold=threshold,
+        router_escalate_token_threshold_p40=(
+            threshold_p40 if threshold_p40 is not None else threshold
+        ),
+        router_escalate_token_threshold_spark=threshold,
         router_escalate_on_destructive=on_destructive,
         router_escalate_on_cascade=on_cascade,
         router_cascade_threshold=cascade_threshold,
@@ -113,6 +120,29 @@ def test_boundary_exactly_at_threshold_stays_local() -> None:
     decision = score_route("coder", "local-spark-coder", _settings(threshold=1000))
     assert decision.escalate is False
     assert decision.reason == "local_default"
+
+
+def test_p40_uses_its_own_lower_threshold() -> None:
+    # Same prompt size, two groups: over the P40 bar but under the Spark bar.
+    # local-p40 escalates (qwen2.5:7b's KV cache can't hold it); local-spark
+    # stays local (the 32b's larger cache fits it).
+    structlog.contextvars.bind_contextvars(data_tier="internal", est_input_tokens=1500)
+    s = _settings(threshold=2000, threshold_p40=1000)
+    assert score_route("triager", "local-p40", s) == RouteDecision(
+        escalate=True, reason="context_overflow"
+    )
+    assert score_route("historian", "local-spark", s) == RouteDecision(
+        escalate=False, reason="local_default"
+    )
+
+
+def test_spark_coder_uses_spark_threshold() -> None:
+    # local-spark-coder shares the Spark ceiling, not the P40 one.
+    structlog.contextvars.bind_contextvars(data_tier="internal", est_input_tokens=1500)
+    s = _settings(threshold=2000, threshold_p40=1000)
+    assert score_route("coder", "local-spark-coder", s) == RouteDecision(
+        escalate=False, reason="local_default"
+    )
 
 
 def test_claude_group_is_a_noop() -> None:
@@ -208,7 +238,7 @@ def test_llm_escalates_to_claude_on_overflow_when_key_set(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-7")
-    monkeypatch.setenv("ROUTER_ESCALATE_TOKEN_THRESHOLD", "1000")
+    monkeypatch.setenv("ROUTER_ESCALATE_TOKEN_THRESHOLD_SPARK", "1000")
     get_settings.cache_clear()
     structlog.contextvars.bind_contextvars(data_tier="internal", est_input_tokens=5000)
     with patch("agents.llm.service_healthy", return_value=True):
@@ -224,7 +254,7 @@ def test_llm_stays_local_on_overflow_without_key(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
     monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
-    monkeypatch.setenv("ROUTER_ESCALATE_TOKEN_THRESHOLD", "1000")
+    monkeypatch.setenv("ROUTER_ESCALATE_TOKEN_THRESHOLD_SPARK", "1000")
     get_settings.cache_clear()
     structlog.contextvars.bind_contextvars(data_tier="internal", est_input_tokens=5000)
     with patch("agents.llm.service_healthy", return_value=True):
@@ -234,7 +264,7 @@ def test_llm_stays_local_on_overflow_without_key(
 
 def test_llm_emits_router_decision_metric(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
-    monkeypatch.setenv("ROUTER_ESCALATE_TOKEN_THRESHOLD", "1000")
+    monkeypatch.setenv("ROUTER_ESCALATE_TOKEN_THRESHOLD_P40", "1000")
     get_settings.cache_clear()
     structlog.contextvars.bind_contextvars(data_tier="internal", est_input_tokens=10)
     child = langgraph_router_decision_total.labels(
