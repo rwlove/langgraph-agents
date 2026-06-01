@@ -25,13 +25,27 @@ from agents.queue.store import TaskClaim
 from agents.queue.worker import QueueWorker
 from agents.settings import get_settings
 
+_CURATED = {
+    "payload_summary": "Increase Frigate memory 4Gi→6Gi",
+    "action_class": "C",
+    "proposed_by": "smart-home-operator",
+    "undo_path": "revert to 4Gi",
+    "cost_estimate_usd": 0.0,
+    "requires_two_person": False,
+}
+
 
 class _FakeQueue:
     def __init__(self) -> None:
-        self.parked: list[tuple[str, datetime]] = []
+        self.parked: list[tuple[str, datetime, dict[str, Any] | None]] = []
 
-    async def park_for_approval(self, task_id: str, deadline: datetime) -> None:
-        self.parked.append((task_id, deadline))
+    async def park_for_approval(
+        self,
+        task_id: str,
+        deadline: datetime,
+        approval_request: dict[str, Any] | None = None,
+    ) -> None:
+        self.parked.append((task_id, deadline, approval_request))
 
     async def attempts_remaining(self, _claim: TaskClaim) -> int:
         return 3
@@ -60,8 +74,8 @@ def _patch_branch(
     acked: list[str] = []
     posted: list[str] = []
 
-    async def _fake_has_pending(_graph: Any, _task_id: str) -> bool:
-        return paused
+    async def _fake_get_pending(_graph: Any, _task_id: str) -> dict[str, Any] | None:
+        return dict(_CURATED) if paused else None
 
     async def _fake_invoke(_self: Any, _task_id: str, _envelope: dict[str, Any]) -> str | None:
         return output
@@ -75,7 +89,7 @@ def _patch_branch(
     async def _fake_completion(_self: Any, *_a: Any, **_kw: Any) -> None:
         return None
 
-    monkeypatch.setattr("agents.queue.worker.has_pending_approval", _fake_has_pending)
+    monkeypatch.setattr("agents.queue.worker.get_pending_approval", _fake_get_pending)
     monkeypatch.setattr("agents.queue.worker.post_approval_for_interrupts", _fake_post_approval)
     monkeypatch.setattr(QueueWorker, "_invoke_graph", _fake_invoke)
     monkeypatch.setattr(QueueWorker, "_ack_with_result", _fake_ack)
@@ -93,9 +107,11 @@ def test_handle_one_parks_when_approval_pending(monkeypatch: pytest.MonkeyPatch)
     asyncio.run(worker._handle_one(_claim()))
 
     assert len(queue.parked) == 1
-    task_id, deadline = queue.parked[0]
+    task_id, deadline, approval_request = queue.parked[0]
     assert task_id == "01J-task"
     assert isinstance(deadline, datetime)
+    # Curated subset is persisted on the parked row for the guardian listing.
+    assert approval_request == _CURATED
     assert posted == ["01J-task"]  # approval webhook fired
     assert acked == []  # NOT acked done
 

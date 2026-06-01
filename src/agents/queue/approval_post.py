@@ -70,6 +70,48 @@ async def has_pending_approval(graph: Any, task_id: str) -> bool:
     return _find_approval_request(snapshot) is not None
 
 
+# The human-decision subset of an ApprovalRequest. The full interrupt
+# payload carries internal routing fields; the guardian listing only
+# needs what lets Rob decide at a glance — the proposed action, its undo
+# path, who proposed it, its class, cost, and whether it needs a second
+# pair of eyes. Single source of truth so the worker (which persists it)
+# and any future consumer agree on the shape.
+APPROVAL_LISTING_FIELDS = (
+    "payload_summary",
+    "action_class",
+    "proposed_by",
+    "undo_path",
+    "cost_estimate_usd",
+    "requires_two_person",
+)
+
+
+def curate_approval_request(approval_request: dict[str, Any]) -> dict[str, Any]:
+    """Project an ApprovalRequest down to the guardian-listing subset."""
+    return {k: approval_request.get(k) for k in APPROVAL_LISTING_FIELDS}
+
+
+async def get_pending_approval(graph: Any, task_id: str) -> dict[str, Any] | None:
+    """Return the curated ApprovalRequest subset for a paused task, else None.
+
+    Worker-facing accessor mirroring `has_pending_approval`'s
+    error-swallowing contract: on any checkpointer read failure it
+    returns None so the dispatch loop never crashes on a detection read
+    (ml-operator prime directive). A missed park is caught by
+    `langgraph-awaiting-user-sweep.ts` at the 30-min escalation tier.
+    """
+    config: Any = {"configurable": {"thread_id": task_id}}
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception:
+        logger.exception("get_pending_approval: aget_state failed task=%s", task_id)
+        return None
+    approval_request = _find_approval_request(snapshot)
+    if approval_request is None:
+        return None
+    return curate_approval_request(approval_request)
+
+
 async def post_approval_for_interrupts(
     graph: Any,
     task_id: str,

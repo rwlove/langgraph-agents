@@ -483,6 +483,14 @@ def test_list_tasks_status_filter_queries_queue_directly(temp_vault: Path) -> No
     """`?status=awaiting_approval` reads task_queue, NOT the checkpointer."""
     deadline = datetime.now(UTC) + timedelta(hours=24)
     parked = datetime.now(UTC)
+    approval_request = {
+        "payload_summary": "Increase Frigate memory 4Gi→6Gi",
+        "action_class": "C",
+        "proposed_by": "smart-home-operator",
+        "undo_path": "revert to 4Gi",
+        "cost_estimate_usd": 0.0,
+        "requires_two_person": False,
+    }
     rows = [
         (
             "01J-aaa",
@@ -490,6 +498,7 @@ def test_list_tasks_status_filter_queries_queue_directly(temp_vault: Path) -> No
             "awaiting_approval",
             deadline,
             parked,
+            approval_request,
         ),
     ]
     pool, cur = _pool_yielding(rows)
@@ -513,9 +522,13 @@ def test_list_tasks_status_filter_queries_queue_directly(temp_vault: Path) -> No
     assert body[0]["queue_status"] == "awaiting_approval"
     assert body[0]["content"] == "delete namespace foo"
     assert body[0]["approval_expires_at"] == deadline.isoformat()
+    # The curated decision subset rides the listing so the HA card can
+    # render what Rob is approving without a per-task detail fetch.
+    assert body[0]["approval_request"] == approval_request
 
     _sql, params = cur.execute.await_args.args
     assert "WHERE status = %s" in _sql
+    assert "approval_request" in _sql
     assert params == ("awaiting_approval",)
 
 
