@@ -66,7 +66,8 @@ async def _list_tasks_by_status(request: Request, status: str) -> list[dict[str,
     async with pool.connection() as conn, conn.cursor() as cur:
         await cur.execute(
             """
-            SELECT id, envelope, status, approval_expires_at, updated_at
+            SELECT id, envelope, status, approval_expires_at, updated_at,
+                   approval_request
             FROM task_queue
             WHERE status = %s
             ORDER BY id DESC
@@ -88,6 +89,13 @@ async def _list_tasks_by_status(request: Request, status: str) -> list[dict[str,
                         approval_expires_at.isoformat() if approval_expires_at else None
                     ),
                     "updated_at": updated_at.isoformat() if updated_at else None,
+                    # Curated ApprovalRequest subset persisted at park time
+                    # (approval_post.curate_approval_request): payload_summary,
+                    # action_class, proposed_by, undo_path, cost_estimate_usd,
+                    # requires_two_person. NULL for non-approval statuses and
+                    # for rows parked before this column existed. The HA
+                    # Companion card renders payload_summary as the headline.
+                    "approval_request": row[5],
                 }
             )
     return out

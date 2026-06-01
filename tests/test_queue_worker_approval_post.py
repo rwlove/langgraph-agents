@@ -19,7 +19,12 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from agents.queue.approval_post import post_approval_for_interrupts
+from agents.queue.approval_post import (
+    APPROVAL_LISTING_FIELDS,
+    curate_approval_request,
+    get_pending_approval,
+    post_approval_for_interrupts,
+)
 from agents.queue.worker import QueueWorker
 from agents.settings import get_settings
 
@@ -251,3 +256,49 @@ def test_approval_post_does_not_raise_on_aget_state_error(
 
     # And no POST should have happened.
     assert recorder.calls == []
+
+
+def test_curate_approval_request_projects_listing_subset() -> None:
+    """`curate_approval_request` keeps only the human-decision fields and
+    fills missing ones with None — the guardian listing must never carry
+    internal routing fields like `target`."""
+    curated = curate_approval_request(_approval_request_dict())
+
+    assert set(curated) == set(APPROVAL_LISTING_FIELDS)
+    assert "target" not in curated  # internal routing field dropped
+    assert curated["payload_summary"] == "Roll out qwen2.5-coder:32b on Spark"
+    assert curated["proposed_by"] == "ml-operator"
+    # A field absent from the source projects to None, never KeyError.
+    assert curate_approval_request({"action_class": "A"})["payload_summary"] is None
+
+
+def test_get_pending_approval_returns_curated_subset() -> None:
+    """A paused task yields the curated subset; the raw interrupt's internal
+    fields don't leak."""
+    snapshot = _FakeSnapshot([_FakeGraphTask([_FakeInterrupt(_approval_request_dict())])])
+    worker = _build_worker(_FakeGraph(snapshot))
+
+    curated = asyncio.run(get_pending_approval(worker._graph, "01J-task"))
+
+    assert curated is not None
+    assert "target" not in curated
+    assert curated["action_class"] == "C"
+
+
+def test_get_pending_approval_none_when_not_paused() -> None:
+    """No approval interrupt → None (worker falls through to its ack path)."""
+    snapshot = _FakeSnapshot([_FakeGraphTask([])])
+    worker = _build_worker(_FakeGraph(snapshot))
+
+    assert asyncio.run(get_pending_approval(worker._graph, "01J-task")) is None
+
+
+def test_get_pending_approval_none_on_aget_state_error() -> None:
+    """Checkpointer read failure → None, never raises (ml-operator prime
+    directive: the dispatch loop must not crash on a detection read)."""
+
+    class _ExplodingGraph:
+        async def aget_state(self, _config: dict[str, Any]) -> Any:
+            raise RuntimeError("checkpointer down")
+
+    assert asyncio.run(get_pending_approval(_ExplodingGraph(), "01J-task")) is None

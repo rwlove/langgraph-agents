@@ -193,7 +193,12 @@ class TaskQueue:
             )
         slog.info("task_acked", task_id=task_id)
 
-    async def park_for_approval(self, task_id: str, approval_expires_at: datetime) -> None:
+    async def park_for_approval(
+        self,
+        task_id: str,
+        approval_expires_at: datetime,
+        approval_request: dict[str, Any] | None = None,
+    ) -> None:
         """Park a claimed task at `awaiting_approval` instead of acking done.
 
         Called by the worker when the graph paused on an ApprovalRequest
@@ -202,6 +207,13 @@ class TaskQueue:
         was actually waiting on Rob in the checkpointer. `approval_expires_at`
         carries the Layer 5 guardian TTL; `expire_overdue_approvals`
         enforces it.
+
+        `approval_request` is the curated decision subset (see
+        `approval_post.curate_approval_request`) persisted on the row so
+        the guardian listing can render what Rob is approving without a
+        checkpointer scan. NULL-safe: a None leaves the column unchanged
+        so the defer-path re-park doesn't clobber an already-stored
+        request.
 
         Idempotent under at-least-once resume: re-parking an already-parked
         row just refreshes `approval_expires_at` (used by the defer path).
@@ -212,10 +224,15 @@ class TaskQueue:
                 UPDATE task_queue
                 SET status = 'awaiting_approval',
                     approval_expires_at = %s,
+                    approval_request = COALESCE(%s::jsonb, approval_request),
                     updated_at = NOW()
                 WHERE id = %s
                 """,
-                (approval_expires_at, task_id),
+                (
+                    approval_expires_at,
+                    json.dumps(approval_request) if approval_request is not None else None,
+                    task_id,
+                ),
             )
         slog.info(
             "task_awaiting_approval",

@@ -35,7 +35,9 @@ class _FakeQueue:
     async def resolve_approval(self, task_id: str, output: str | None) -> None:
         self.resolved.append((task_id, output))
 
-    async def park_for_approval(self, task_id: str, deadline: datetime) -> None:
+    async def park_for_approval(
+        self, task_id: str, deadline: datetime, approval_request: dict | None = None
+    ) -> None:
         self.parked.append((task_id, deadline))
 
 

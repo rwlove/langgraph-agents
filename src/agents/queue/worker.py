@@ -49,7 +49,7 @@ from agents.observability import (
     langgraph_awaiting_approval_tasks,
     served_groups_for,
 )
-from agents.queue.approval_post import has_pending_approval, post_approval_for_interrupts
+from agents.queue.approval_post import get_pending_approval, post_approval_for_interrupts
 from agents.router import estimate_input_tokens
 from agents.settings import get_settings
 from agents.state import FleetState
@@ -337,12 +337,16 @@ class QueueWorker:
         # Acking it `done` here (the historical bug) made the durable
         # queue lie about a task still alive in the checkpointer.
         #
-        # `has_pending_approval` is webhook-independent so a deployment
+        # `get_pending_approval` is webhook-independent so a deployment
         # with no approval webhook still parks correctly. It swallows
-        # checkpointer errors (returns False) so the dispatch loop never
+        # checkpointer errors (returns None) so the dispatch loop never
         # crashes on a detection read — a missed park is caught by
         # langgraph-awaiting-user-sweep.ts at the 30-min escalation tier.
-        if await has_pending_approval(self._graph, task_id):
+        # The returned curated subset is persisted on the parked row so
+        # the guardian listing can render the decision without a
+        # checkpointer scan (HA Companion approval card).
+        approval_request = await get_pending_approval(self._graph, task_id)
+        if approval_request is not None:
             # Fire the Windmill approval webhook so ntfy + Zulip cards
             # surface immediately (best-effort, webhook-gated internally).
             await post_approval_for_interrupts(
@@ -354,7 +358,11 @@ class QueueWorker:
             # Park the durable row at `awaiting_approval` with the Layer 5
             # guardian TTL. The /approval resume path acks it `done`; the
             # guardian sweep expires it to the DLQ if Rob never answers.
-            await self._queue.park_for_approval(task_id, self._approval_deadline(envelope))
+            await self._queue.park_for_approval(
+                task_id,
+                self._approval_deadline(envelope),
+                approval_request=approval_request,
+            )
             return
 
         await self._ack_with_result(task_id, output)
