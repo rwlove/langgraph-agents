@@ -291,10 +291,12 @@ class Settings(BaseSettings):
         default=16384,
         description=(
             "num_ctx for the P40-served local group (qwen2.5:7b). Sized for VRAM "
-            "safety: the P40 (24GB) is shared by five GPU pods (Ollama, ComfyUI, "
-            "Whisper, and two Immich ML workers), leaving only ~6GB free. A 32k "
-            "KV cache (~1.9GB on top of the 7b's ~4.7GB weights) risks OOM under "
-            "a ComfyUI burst; 16384 (~0.95GB KV) keeps a safe margin. Without any "
+            "safety: the P40 (24GB) is shared by GPU pods (Ollama, Whisper, two "
+            "Immich ML workers) — ComfyUI moved off the P40 to the Spark/GB10 "
+            "2026-06-05, freeing headroom, so this conservative cap could be "
+            "revisited. A 32k KV cache (~1.9GB on top of the 7b's ~4.7GB weights) "
+            "historically risked OOM under a ComfyUI burst; 16384 (~0.95GB KV) "
+            "keeps a safe margin. Without any "
             "num_ctx Ollama caps prompts at its small runtime default (~4096) and "
             "silently truncates anything larger. Keep >= "
             "router_escalate_token_threshold_p40."

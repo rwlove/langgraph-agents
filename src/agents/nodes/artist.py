@@ -1,11 +1,16 @@
-"""artist — image generation via Pixelle-MCP / ComfyUI.
+"""artist — image generation via artokun/comfyui-mcp.
 
-Composes a structured `GenerationRequest`: which ComfyUI workflow to invoke,
-the diffusion prompt, params, expected output path. Errand-runner executes
-the actual Pixelle-MCP call under signed approval.
+Composes a structured `GenerationRequest`: which comfyui-mcp generation tool
+to invoke (generate_image / generate_with_controlnet / generate_with_ip_adapter,
+or enqueue_workflow for a full graph), the diffusion prompt, params, expected
+output path. Errand-runner executes the actual comfyui-mcp call under signed
+approval; the write tuples live in its allowlist, the read-only subset in
+artist's.
 
-The Pixelle MCP capability tuples in `tools/mcp.py` are stubs — populated
-once Pixelle is deployed and the workflow inventory stabilizes.
+Backend: ComfyUI on the DGX Spark (GB10) at comfyui-spark.ai.svc:8188, run
+with --lowvram and a fresh basedir (models re-download on first use). The
+GB10 is time-sliced and its unified memory is shared with ollama-spark, so
+available VRAM is dynamic — query get_system_stats before sizing big jobs.
 """
 
 from __future__ import annotations
@@ -34,10 +39,12 @@ def artist_node(state: FleetState) -> dict[str, Any]:
         HumanMessage(
             content=(
                 f"REQUEST:\n\n{state.content}\n\n"
-                "Produce a GenerationRequest per your SOUL: which Pixelle workflow, "
-                "the reworked diffusion prompt, params (width/height/steps/seed/cfg), "
-                "expected vault output path, wall-time estimate, and a one-paragraph "
-                "rationale.\n\n"
+                "Produce a GenerationRequest per your SOUL: which comfyui-mcp "
+                "generation tool (generate_image / generate_with_controlnet / "
+                "generate_with_ip_adapter, or enqueue_workflow), the reworked "
+                "diffusion prompt, params (width/height/steps/seed/cfg, model/"
+                "checkpoint), expected vault output path, wall-time estimate, and "
+                "a one-paragraph rationale.\n\n"
                 "If the ask is for real-person portraits or NSFW content, refuse "
                 "politely with the reason. If the workflow choice is ambiguous, ask "
                 "ADMIN before generating."
