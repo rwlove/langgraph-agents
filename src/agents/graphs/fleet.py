@@ -49,7 +49,7 @@ _DEFAULT_ACTION_CLASS: dict[str, ActionClass] = {
     "property-coordinator": "B",
     "doc-writer": "B",
     "reporter": "A",  # output-only — reads state, renders, no side effects
-    "artist": "B",  # drafts GenerationRequest; errand-runner executes Pixelle MCP
+    "artist": "B",  # drafts GenerationRequest; errand-runner executes comfyui-mcp
     "security": "A",  # surveillance read-only; HA writes route via errand-runner
     "auditor": "A",  # research only; patches route via homelab-engineer
 }

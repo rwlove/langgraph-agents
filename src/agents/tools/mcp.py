@@ -115,6 +115,28 @@ _READ_ONLY_SEARXNG: tuple[MCPCapability, ...] = (
     MCPCapability("searxng-mcp", "search", write=False),
 )
 
+# ComfyUI image generation — artokun/comfyui-mcp, backed by the ComfyUI on
+# the DGX Spark (GB10) at comfyui-spark.ai.svc:8188 (cut over from the P40
+# 2026-06-05). Method names are the server's native (un-prefixed) tool names;
+# the gateway federates them as `comfyui_*`. The generation tools create GPU
+# jobs → write, so they live on errand-runner only (the sole writer). Artist
+# holds the read-only subset to size its proposals against live VRAM
+# headroom / model inventory / queue depth.
+_READ_ONLY_COMFYUI: tuple[MCPCapability, ...] = (
+    MCPCapability("comfyui-mcp", "get_system_stats", write=False),
+    MCPCapability("comfyui-mcp", "list_local_models", write=False),
+    MCPCapability("comfyui-mcp", "list_workflows", write=False),
+    MCPCapability("comfyui-mcp", "get_queue", write=False),
+    MCPCapability("comfyui-mcp", "get_job_status", write=False),
+)
+
+_WRITE_COMFYUI: tuple[MCPCapability, ...] = (
+    MCPCapability("comfyui-mcp", "generate_image", write=True),
+    MCPCapability("comfyui-mcp", "generate_with_controlnet", write=True),
+    MCPCapability("comfyui-mcp", "generate_with_ip_adapter", write=True),
+    MCPCapability("comfyui-mcp", "enqueue_workflow", write=True),
+)
+
 # Smoke-test pseudo-capability. The server name "smoke" is NOT a real MCP
 # server — errand-runner intercepts targets prefixed with "smoke." before
 # the MCPGatewayClient call and runs a filesystem self-verifying smoke
@@ -140,11 +162,13 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
         _WRITE_HA
         + _WRITE_PAPERLESS
         + _WRITE_ARR
+        + _WRITE_COMFYUI  # executes artist's GenerationRequests under signed approval
         + _READ_ONLY_HA
         + _READ_ONLY_PAPERLESS
         + _READ_ONLY_KUBECTL
         + _READ_ONLY_PROMETHEUS
         + _READ_ONLY_GRAFANA
+        + _READ_ONLY_COMFYUI
         + _SMOKE_TEST  # smoke approval-flow verification (filesystem, not MCP)
     ),
     "supervisor": frozenset(
@@ -211,11 +235,13 @@ ALLOWLISTS: dict[AgentId, frozenset[MCPCapability]] = {
     ),
     "doc-writer": frozenset(_READ_ONLY_SEARXNG),  # for verifying upstream terminology
     "reporter": frozenset(),  # output-only — no MCP, no side effects
-    # Artist proposes Pixelle invocations; errand-runner executes them. v1
-    # capability is empty — once Pixelle is deployed in the cluster and the
-    # workflow inventory stabilizes, populate a `_PIXELLE_IMAGE_GEN` tuple
-    # with (server, method) pairs for each workflow.
-    "artist": frozenset(),
+    # Artist composes GenerationRequests; errand-runner executes the actual
+    # comfyui-mcp generation call under signed approval (the write tools live
+    # there, not here). Artist gets the read-only ComfyUI subset so it can
+    # check live VRAM headroom, the local model inventory, and queue depth
+    # before proposing params — the GB10 is shared with ollama-spark, so the
+    # available VRAM is dynamic, not fixed.
+    "artist": frozenset(_READ_ONLY_COMFYUI),
     # Security reads HA entities (door/lock/motion/away-mode). Frigate access
     # is direct HTTP (not via mcp-gateway) — see SOUL for the why.
     "security": frozenset(_READ_ONLY_HA),
