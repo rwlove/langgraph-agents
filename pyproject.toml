@@ -116,3 +116,6 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+# Put the repo root on sys.path so the root-level `evals` harness (dev tooling,
+# deliberately not part of the shipped `agents` package) is importable in tests.
+pythonpath = ["."]
