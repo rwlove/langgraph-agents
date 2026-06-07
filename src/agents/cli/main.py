@@ -7,6 +7,8 @@ Subcommands:
     hai task ls
     hai task show <task_id>
 
+    hai offload "<content>" [--agent AGENT_ID] [--no-tail]
+
     hai todo add "<body>" [--tag T]*
     hai todo ls [--all]
     hai todo done <id>
@@ -40,6 +42,7 @@ from agents.cli.config import (
     write_default_config,
     write_token,
 )
+from agents.state import ALL_AGENT_IDS
 
 # ---------- Helpers ----------
 
@@ -97,6 +100,72 @@ def cmd_task_tail(args: argparse.Namespace) -> None:
     _need_token(cfg)
     with HaiClient(cfg) as client:
         _tail(client, cfg, args.task_id)
+
+
+# ---------- offload (Path 2: Claude-Code -> fleet) ----------
+
+
+def build_offload_body(
+    content: str, *, agent: str | None, conversation_id: str | None, task_id: str
+) -> dict[str, Any]:
+    """POST body for a Path-2 offload.
+
+    ``source="claude-code"`` is the load-bearing field: it fires the router's
+    no-escalate guard (`agents.router.is_claude_code_source`) so the offloaded
+    work is never escalated to the metered Claude API — the caller is already a
+    flat-rate Claude that could do the work itself.
+    """
+    body: dict[str, Any] = {
+        "task_id": task_id,
+        "source": "claude-code",
+        "user": "rob",
+        "content": content,
+    }
+    if agent:
+        body["target_agent"] = agent
+    if conversation_id:
+        body["conversation_id"] = conversation_id
+    return body
+
+
+def unknown_agent(agent: str | None) -> bool:
+    """True if `agent` is set but not a real AgentId (client-side guard)."""
+    return agent is not None and agent not in ALL_AGENT_IDS
+
+
+def cmd_offload(args: argparse.Namespace) -> None:
+    """Hand a task to the fleet from a Claude-Code session (Path 2).
+
+    Pins ``source="claude-code"`` (never escalates to the API) and optionally
+    ``--agent`` to target a specialist directly, bypassing the triager.
+    """
+    if unknown_agent(args.agent):
+        print(
+            f"error: unknown agent {args.agent!r}.\n"
+            f"Valid agents: {', '.join(sorted(ALL_AGENT_IDS))}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    cfg = load_config()
+    _need_token(cfg)
+    with HaiClient(cfg) as client:
+        body = build_offload_body(
+            args.content,
+            agent=args.agent,
+            conversation_id=args.conversation_id,
+            task_id=_ulid_ish_id("cc"),
+        )
+        resp = client.request("POST", "/inbox", json=body)
+        assert isinstance(resp, dict)
+        task_id = resp["task_id"]
+        conversation_id = resp.get("conversation_id", task_id)
+        print(
+            f"task_id: {task_id}  conversation_id: {conversation_id}"
+            f"  status: {resp.get('status', 'accepted')}"
+        )
+        if args.no_tail:
+            return
+        _tail(client, cfg, task_id)
 
 
 def _tail(client: HaiClient, cfg: Config, task_id: str) -> None:
@@ -396,6 +465,29 @@ def _build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     p_task_show = s_task.add_parser("show", help="show one task's full state")
     p_task_show.add_argument("task_id")
     p_task_show.set_defaults(func=cmd_task_show)
+
+    # offload — Path 2: hand a task to the fleet from a Claude-Code session
+    p_offload = sub.add_parser(
+        "offload",
+        help="hand a task to the fleet (source=claude-code; never escalates to the API)",
+    )
+    p_offload.add_argument("content")
+    p_offload.add_argument(
+        "--agent",
+        metavar="AGENT_ID",
+        default=None,
+        help="pin a specialist directly, bypassing the triager",
+    )
+    p_offload.add_argument(
+        "--no-tail", action="store_true", help="don't block waiting for the result"
+    )
+    p_offload.add_argument(
+        "--conversation-id",
+        metavar="ID",
+        default=None,
+        help="continue an existing conversation thread",
+    )
+    p_offload.set_defaults(func=cmd_offload)
 
     # awaiting — tasks paused for the user's input
     p_awaiting = sub.add_parser("awaiting", help="show only tasks needing user input (interrupts)")
