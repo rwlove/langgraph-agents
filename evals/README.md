@@ -62,6 +62,11 @@ Runs are sequential — the fleet shares one Spark GPU.
 
 ## Status
 
-`network-operator` golden set is the template. Seeding the four high-traffic
-agents (`reporter`, `observability-operator`, `researcher`, `homelab-engineer`)
-from Langfuse is pending MCP-gateway access.
+Hand-authored golden sets ship for `network-operator` (the template),
+`storage-operator`, `smart-home-operator`, and `ml-operator` — the low-traffic
+agents that were always going to be hand-authored. **They are DRAFTS**: review
+and tune them against real usage before trusting a routing verdict.
+
+Seeding the four high-traffic agents (`reporter`, `observability-operator`,
+`researcher`, `homelab-engineer`) from real `/inbox` traffic in Langfuse is
+pending MCP-gateway access.
