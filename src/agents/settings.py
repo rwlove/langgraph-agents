@@ -350,6 +350,19 @@ class Settings(BaseSettings):
             "router_escalate_on_cascade is True."
         ),
     )
+    router_suppress_escalation_for_claude_code: bool = Field(
+        default=True,
+        description=(
+            "Path-2 guard (HOMELAB-SPEC Layer 6): when True, a task whose source "
+            "is 'claude-code' (work offloaded from a Claude-Code session) never "
+            "escalates to the metered Claude API. The caller is already a "
+            "flat-rate Claude that can do the work itself, so the fleet bounces "
+            "back to it rather than spend per-token. Suppresses BOTH an explicit "
+            "escalate=True and the scorer's auto-escalate triggers. The explicit "
+            "group='claude' / AGENT_GROUP='claude' path is NOT suppressed -- that "
+            "is a considered routing choice, not an escalation. Default ON."
+        ),
+    )
 
     # --- startup sweep ---
     # P3.7's startup sweep walks the langgraph_checkpoints table to log
