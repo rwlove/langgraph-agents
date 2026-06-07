@@ -84,6 +84,13 @@ Source = Literal[
     "test",
     "openwebui",
     "cli",
+    # `claude-code` — work offloaded from a Claude-Code session ("Path 2":
+    # a laptop Claude handing a task down to a local fleet agent). The
+    # router treats this source specially: it never escalates to the metered
+    # Claude API (the caller is already a flat-rate Claude that can do the
+    # work itself). See agents.router.is_claude_code_source +
+    # settings.router_suppress_escalation_for_claude_code.
+    "claude-code",
     # `scheduled` — added 2026-05-24 after the storage-weekly Path-2
     # smoke caught that cron-fired workflows were 422-ing at /inbox.
     # Six Windmill flows had been emitting `source: "scheduled"`

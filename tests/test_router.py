@@ -21,7 +21,12 @@ from langchain_ollama import ChatOllama
 from agents.health import reset_cache
 from agents.llm import llm
 from agents.observability import langgraph_router_decision_total
-from agents.router import RouteDecision, estimate_input_tokens, score_route
+from agents.router import (
+    RouteDecision,
+    estimate_input_tokens,
+    is_claude_code_source,
+    score_route,
+)
 from agents.settings import Settings, get_settings
 
 
@@ -52,6 +57,7 @@ def _settings(
     on_destructive: bool = False,
     on_cascade: bool = False,
     cascade_threshold: int = 2,
+    suppress_claude_code: bool = True,
 ) -> Settings:
     # `threshold` sets BOTH per-group bars by default so the single-threshold
     # matrix below is group-agnostic; `threshold_p40` overrides just the P40 bar
@@ -65,6 +71,7 @@ def _settings(
         router_escalate_on_destructive=on_destructive,
         router_escalate_on_cascade=on_cascade,
         router_cascade_threshold=cascade_threshold,
+        router_suppress_escalation_for_claude_code=suppress_claude_code,
     )
 
 
@@ -274,3 +281,81 @@ def test_llm_emits_router_decision_metric(monkeypatch: pytest.MonkeyPatch) -> No
     with patch("agents.llm.service_healthy", return_value=True):
         llm("triager")  # triager is local-p40, under threshold -> local_default
     assert child._value.get() == before + 1
+
+
+# --- Path-2: claude-code-origin no-escalate guard ----------------------------
+
+
+def test_claude_code_origin_pinned_local_even_over_threshold() -> None:
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", source="claude-code", est_input_tokens=99999
+    )
+    decision = score_route("coder", "local-spark-coder", _settings(threshold=1000))
+    assert decision == RouteDecision(escalate=False, reason="claude_code_origin")
+
+
+def test_claude_code_suppression_can_be_disabled() -> None:
+    # Guard off -> a Claude-Code task escalates on overflow like any other.
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", source="claude-code", est_input_tokens=99999
+    )
+    decision = score_route(
+        "coder", "local-spark-coder", _settings(threshold=1000, suppress_claude_code=False)
+    )
+    assert decision == RouteDecision(escalate=True, reason="context_overflow")
+
+
+def test_restricted_precedes_claude_code() -> None:
+    # Both pin local; restricted is the stronger invariant and reported first.
+    structlog.contextvars.bind_contextvars(
+        data_tier="restricted", source="claude-code", est_input_tokens=99999
+    )
+    decision = score_route("coder", "local-spark-coder", _settings(threshold=1000))
+    assert decision == RouteDecision(escalate=False, reason="restricted_pinned_local")
+
+
+def test_is_claude_code_source_helper() -> None:
+    structlog.contextvars.bind_contextvars(source="claude-code")
+    assert is_claude_code_source(_settings()) is True
+    assert is_claude_code_source(_settings(suppress_claude_code=False)) is False
+
+
+def test_is_claude_code_source_false_for_other_sources() -> None:
+    structlog.contextvars.bind_contextvars(source="zulip")
+    assert is_claude_code_source(_settings()) is False
+
+
+def test_llm_claude_code_origin_stays_local_on_overflow_with_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Scorer would escalate on overflow, but the Path-2 guard pins it local even
+    # with a key set — Claude-Code offloads never reach the metered API.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-7")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+    monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
+    monkeypatch.setenv("ROUTER_ESCALATE_TOKEN_THRESHOLD_SPARK", "1000")
+    get_settings.cache_clear()
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", source="claude-code", est_input_tokens=5000
+    )
+    with patch("agents.llm.service_healthy", return_value=True):
+        model = llm("coder")
+    assert isinstance(model, ChatOllama)
+
+
+def test_llm_claude_code_origin_suppresses_explicit_escalate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The explicit escalate=True path the scorer never sees is also suppressed.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-7")
+    monkeypatch.setenv("OLLAMA_SPARK_URL", "http://spark.test:11434")
+    monkeypatch.setenv("OLLAMA_P40_URL", "http://p40.test:11434")
+    get_settings.cache_clear()
+    structlog.contextvars.bind_contextvars(
+        data_tier="internal", source="claude-code", est_input_tokens=10
+    )
+    with patch("agents.llm.service_healthy", return_value=True):
+        model = llm("coder", escalate=True)
+    assert isinstance(model, ChatOllama)

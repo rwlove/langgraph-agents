@@ -40,7 +40,7 @@ from agents.observability import (
     task_spend_usd,
 )
 from agents.redaction import assert_emission_allowed
-from agents.router import score_route
+from agents.router import is_claude_code_source, score_route
 from agents.settings import get_settings
 
 if TYPE_CHECKING:
@@ -249,6 +249,15 @@ def llm(  # noqa: PLR0911 — explicit returns map 1:1 to documented routing bra
     ).inc()
     if decision.escalate and _claude_allowed(settings):
         escalate = True
+
+    # Path-2 guard (HOMELAB-SPEC Layer 6): never escalate a task offloaded from
+    # a Claude-Code session to the metered API. Covers both the scorer's
+    # decision (already suppressed in score_route, kept here belt-and-suspenders)
+    # and an explicit escalate=True the scorer never sees. The explicit
+    # group="claude" / AGENT_GROUP="claude" path below is intentionally NOT
+    # touched — that's a considered routing choice, not an escalation.
+    if escalate and is_claude_code_source(settings):
+        escalate = False
 
     if escalate and _claude_allowed(settings):
         return _build_claude(settings, agent_id, "claude", temperature=temperature, trigger=trigger)

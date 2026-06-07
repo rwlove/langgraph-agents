@@ -48,6 +48,24 @@ if TYPE_CHECKING:
 _CHARS_PER_TOKEN = 4
 _PROMPT_OVERHEAD_TOKENS = 2000
 
+# Source value for work offloaded from a Claude-Code session ("Path 2"). Tasks
+# with this source never escalate to the metered Claude API — see
+# `is_claude_code_source` and `settings.router_suppress_escalation_for_claude_code`.
+_CLAUDE_CODE_SOURCE = "claude-code"
+
+
+def is_claude_code_source(settings: Settings) -> bool:
+    """True if the current task is a Claude-Code offload AND the Path-2 guard is on.
+
+    Reads `source` from structlog contextvars (bound at /inbox and re-bound by
+    the queue worker). `agents.llm.llm()` uses this to suppress an *explicit*
+    ``escalate=True`` — the case `score_route` never sees because that arg is
+    passed straight to the factory, not derived from the scorer.
+    """
+    if not settings.router_suppress_escalation_for_claude_code:
+        return False
+    return structlog.contextvars.get_contextvars().get("source") == _CLAUDE_CODE_SOURCE
+
 
 def estimate_input_tokens(content: str) -> int:
     """Cheap, deterministic upper-ish estimate of assembled prompt size.
@@ -64,7 +82,7 @@ class RouteDecision:
 
     escalate: bool
     # local_default | context_overflow | restricted_pinned_local | scorer_disabled
-    #   | destructive_escalation | cascade_escalation
+    #   | destructive_escalation | cascade_escalation | claude_code_origin
     reason: str
 
 
@@ -93,6 +111,15 @@ def score_route(  # noqa: PLR0911 — returns map 1:1 to documented decision bra
     # even decide to escalate it.
     if ctx.get("data_tier") == "restricted":
         return RouteDecision(escalate=False, reason="restricted_pinned_local")
+
+    # Path-2 guard: work offloaded from a Claude-Code session never escalates to
+    # the metered API — the caller is already a flat-rate Claude that can do the
+    # work itself, so bounce back to it. Pinned local like restricted-tier, and
+    # ahead of the capability triggers so even an overflowing Claude-Code task
+    # stays local (and reports this reason, not context_overflow).
+    cc_guard = settings.router_suppress_escalation_for_claude_code
+    if cc_guard and ctx.get("source") == _CLAUDE_CODE_SOURCE:
+        return RouteDecision(escalate=False, reason="claude_code_origin")
 
     # The one capability-driven trigger. Unbound (directly-enqueued tasks,
     # tests, legacy callers that never hit /inbox) reads as 0 -> stays local.
