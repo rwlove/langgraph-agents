@@ -176,6 +176,54 @@ def _checkpointer_pool(checkpointer: BaseCheckpointSaver[Any]) -> AsyncConnectio
     return cast("AsyncConnectionPool[Any]", conn)
 
 
+async def _build_queue_pool(
+    stack: AsyncExitStack, settings: Settings
+) -> AsyncConnectionPool[Any]:
+    """Dedicated Postgres pool for the task-queue substrate.
+
+    Deliberately separate from the checkpointer pool. `AsyncPostgresSaver`
+    holds checkpointer-pool connections for the full duration of a graph
+    run — 35-123s of LLM calls in practice — and can saturate that pool's
+    slots while a run is in flight. The guardian poll
+    (`GET /admin/tasks?status=awaiting_approval`, hit once a minute by HA
+    with a 15s client timeout) reads through `TaskQueue`, which until now
+    shared the checkpointer pool: the poll could queue-wait for a free
+    connection behind a running graph and blow psycopg's 30s default
+    acquire timeout, surfacing as intermittent client-side timeouts. A
+    dedicated pool — only short, well-indexed queue SELECT/UPDATEs ever
+    touch it — severs that contention.
+
+    Same half-open-TCP hardening kwargs as the checkpointer pool (see
+    `_build_checkpointer` for the full rationale: tcp_user_timeout is the
+    load-bearing fix, keepalives are defense-in-depth). `autocommit=True`
+    + `prepare_threshold=0` match the pool `TaskQueue` was originally
+    written against, so its transaction semantics are unchanged. Smaller
+    `max_size` since queue ops are fast and bounded, and an explicit 5s
+    acquire `timeout` so a genuinely exhausted pool fails fast (clean
+    error) instead of parking past the client's deadline.
+    """
+    pool = AsyncConnectionPool(
+        conninfo=settings.postgres_url,
+        min_size=1,
+        max_size=4,
+        timeout=5.0,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+            "tcp_user_timeout": 15000,
+        },
+        check=AsyncConnectionPool.check_connection,
+        max_idle=60,
+        open=False,
+    )
+    await stack.enter_async_context(pool)
+    return pool
+
+
 async def _build_store(stack: AsyncExitStack, settings: Settings) -> MCPMemoryStore | None:
     """Build the long-term cross-agent KG store, or None to disable.
 
@@ -288,13 +336,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         stack.push_async_callback(app.state.dedup_store.close)
 
-        # Phase 4.M2 — task queue substrate. Reuses the checkpointer's
-        # Postgres pool (same CNPG cluster, same Barman backup line).
+        # Phase 4.M2 — task queue substrate. Uses a DEDICATED Postgres pool
+        # (same CNPG cluster, same Barman backup line) rather than sharing
+        # the checkpointer's: a long graph run holds checkpointer-pool
+        # connections for 35-123s and could starve the once-a-minute
+        # guardian status poll past its client timeout. The probe below
+        # keeps the dev/MemorySaver gating intact — no Postgres path means
+        # no checkpointer pool, so the worker stays disabled as before.
         # `ensure_schema` applies idempotent migrations on startup. The
         # `QueueWorker` runs as a background asyncio task draining the
         # queue and invoking the graph (the work the synchronous /inbox
-        # used to do inline).
-        queue_pool = _checkpointer_pool(checkpointer)
+        # used to do inline) — graph invocation still uses the checkpointer
+        # pool internally, so only the queue substrate moves to the new pool.
+        if _checkpointer_pool(checkpointer) is not None:
+            queue_pool = await _build_queue_pool(stack, settings)
+        else:
+            queue_pool = None
         app.state.queue_pool = queue_pool
         if queue_pool is not None:
             await ensure_queue_schema(queue_pool)
