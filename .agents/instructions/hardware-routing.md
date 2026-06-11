@@ -2,6 +2,32 @@
 
 The `agents.llm.llm(agent_id)` factory is the single source of truth for which model serves which agent on which GPU. This doc summarizes the live mapping so changes to `AGENT_GROUP` / `GROUP_MODELS` don't drift from the README and so Claude sessions in this repo can reason about the routing without re-reading the code each time.
 
+## Hardware facts — GB10 Spark (ASUS Ascent GX10)
+
+Sourced from NVIDIA/ASUS spec sheets (2026-06) + measured on the live unit.
+Don't assume beyond these; re-verify before sizing model work.
+
+| Fact | Value | Notes |
+|---|---|---|
+| Unified memory | 128 GB LPDDR5x, 256-bit | CPU+GPU coherent |
+| Memory bandwidth | **273 GB/s** (NVIDIA GB10) / **276 GB/s** (ASUS GX10) | the binding constraint for token generation |
+| Inter-unit link | **NVIDIA ConnectX-7, 200 Gbps (= 25 GB/s)** + a 10 GbE LAN | GX10 has one ConnectX-7 (Founders ed. has dual QSFP) |
+| Two-unit config | direct ConnectX-7 cable, no switch → **256 GB pool → models up to 405B** | NVIDIA's official ceiling |
+| Measured generation | **qwen2.5:32b ≈ 10 tok/s**, qwen2.5:72b ≈ 5 tok/s | corroborates ~273 GB/s; prompt eval ~240 tok/s |
+| DCGM | mostly broken (power + SM clock only) | use power draw as the "busy" proxy; see `reference_dcgm_gb10_broken_counters` |
+
+**Memory ≫ link (276 ÷ 25 ≈ 11×).** Splitting a model across two Sparks buys
+*capacity* (fit a 235B/405B model), not *speed* — cross-device traffic rides the
+25 GB/s link while each Spark's own weights stream at ~273 GB/s. So a 2nd Spark
+is best run **independent** (one serving the fleet hot, one dedicated to a big
+always-warm model), not **linked** for one giant slow model. Full bake-off +
+rationale: `reference_gb10_local_model_bakeoff` in home-ops memory.
+
+**Model selection on this hardware:** bigger *dense* doesn't help vs a strong
+remote model (32b ≈ 72b in quality, half the speed); **MoE is the lever**
+(gpt-oss:120b, ~5B active, fits and is far better per token). Multi-node serving
+(linked Sparks) needs vLLM/SGLang — ollama is single-node.
+
 ## Groups
 
 | Group | Endpoint | Model | Hardware |
