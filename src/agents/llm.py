@@ -483,10 +483,16 @@ def _build_claude(
     lf = langfuse_callback_handler(agent_id)
     if lf is not None:
         callbacks.append(lf)
+    # `temperature` is intentionally NOT forwarded. Newer Anthropic models
+    # (claude-opus-4.x) reject the parameter outright — the API returns
+    # 400 "`temperature` is deprecated for this model" — which silently breaks
+    # every escalate-to-Claude call. The Claude path is escalation / strongest-
+    # reviewer work where the model default is fine; determinism isn't load-
+    # bearing here. The `temperature` arg is kept in the signature for the
+    # shared call convention (and is still honored on the Ollama path).
     return ChatAnthropic(  # type: ignore[call-arg]
         model=settings.claude_model,
         api_key=SecretStr(settings.anthropic_api_key),
-        temperature=temperature,
         callbacks=callbacks,
     )
 

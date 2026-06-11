@@ -19,7 +19,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_ollama import ChatOllama
 
 from agents.health import reset_cache
-from agents.llm import llm
+from agents.llm import _build_claude, llm
 from agents.observability import langgraph_router_decision_total
 from agents.router import (
     RouteDecision,
@@ -359,3 +359,23 @@ def test_llm_claude_code_origin_suppresses_explicit_escalate(
     with patch("agents.llm.service_healthy", return_value=True):
         model = llm("coder", escalate=True)
     assert isinstance(model, ChatOllama)
+
+
+def test_build_claude_omits_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Regression: newer Anthropic models (claude-opus-4.x) 400 on `temperature`
+    # ("deprecated for this model"), which silently breaks every escalation.
+    # The Claude path must construct ChatAnthropic WITHOUT temperature.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-7")
+    get_settings.cache_clear()
+    captured: dict[str, object] = {}
+
+    class _FakeAnthropic:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    structlog.contextvars.bind_contextvars(data_tier="internal")
+    with patch("agents.llm.ChatAnthropic", _FakeAnthropic):
+        _build_claude(get_settings(), "coder", "claude", temperature=0.2, trigger="")
+    assert "temperature" not in captured
+    assert captured.get("model") == "claude-opus-4-7"

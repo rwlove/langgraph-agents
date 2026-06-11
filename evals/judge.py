@@ -92,12 +92,12 @@ def _default_model() -> BaseChatModel:
     if settings.anthropic_api_key is None:
         msg = "eval judge requires ANTHROPIC_API_KEY"
         raise RuntimeError(msg)
-    # Mirrors agents.llm._build_claude's construction (model alias + SecretStr
-    # api_key); max_tokens bumped so structured scores + reasoning don't truncate.
+    # Mirrors agents.llm._build_claude: no `temperature` (newer Anthropic models
+    # reject it — 400 "deprecated for this model"); max_tokens bumped so
+    # structured scores + reasoning don't truncate.
     return ChatAnthropic(  # type: ignore[call-arg]
         model=settings.claude_model,
         api_key=SecretStr(settings.anthropic_api_key),
-        temperature=0.0,
         max_tokens=_JUDGE_MAX_TOKENS,
     )
 
