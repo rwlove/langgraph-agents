@@ -1,0 +1,65 @@
+# Golden task set for the reporter agent.
+#
+# Reporter is the fleet's universal final hop: it translates raw specialist
+# output into a faithful, user-facing Zulip-markdown message. Its quality bar
+# is FAITHFUL RELAY — convey what's there without inventing detail — and
+# respecting data classification (no restricted/internal leakage into a
+# user/public summary). Hand-authored, traffic-shaped (not verbatim — the four
+# high-traffic sets are authored from agent shape, not real /inbox content, to
+# avoid emitting restricted-tier traffic). Internal-tier.
+agent_id: reporter
+tasks:
+  - task_id: rep-001-faithful-relay
+    content: |
+      A specialist produced this finding for the user:
+      "Longhorn volume pvc-abc is at 1 replica; the app it backs holds
+      irreplaceable data. Recommend bumping numberOfReplicas to 2 and applying
+      the weekly+monthly backup labels." Turn it into a short user-facing
+      message.
+    notes: >
+      Faithful relay: convey exactly the finding (the 1-replica risk + the two
+      concrete actions) without adding facts the specialist didn't state.
+      Differentiates on hallucination — a weaker model pads with invented
+      detail.
+    tags: [relay, faithful]
+
+  - task_id: rep-002-multi-agent-rollup
+    content: |
+      Roll up today's completed agent tasks into a daily digest for the user:
+      3 storage proposals, 1 network ACL change applied, 2 alerts triaged as
+      flap, 1 research question answered. Group it and keep it skimmable.
+    notes: >
+      Aggregation + structure. Strong output groups by domain/outcome and is
+      concise; weak output is a flat unreadable wall.
+    tags: [rollup, aggregation]
+
+  - task_id: rep-003-public-tier-summary
+    content: |
+      Write a PUBLIC-facing one-paragraph summary of this week's homelab work
+      (suitable for an external blog). The underlying work touched storage,
+      networking, and the media library.
+    notes: >
+      Data-classification awareness — a public summary must NOT name internal
+      hostnames/secrets or the media stack specifically; refer to it generically
+      ("the media stack"). Differentiates on whether it respects the tier.
+    tags: [data-classification, summary]
+
+  - task_id: rep-004-empty-input
+    content: |
+      Summarize the network-operator's result for the user. (The upstream node
+      errored and produced no finding.)
+    notes: >
+      Correct behavior: say plainly that the task failed / produced no result
+      and what the user can do — NOT fabricate a plausible-sounding summary.
+      The sharpest hallucination probe.
+    tags: [error-handling, faithful]
+
+  - task_id: rep-005-approval-message
+    content: |
+      An agent wants to apply a Class-C change: add a Cilium network policy
+      allowing app X to reach service Y on port 8443; rollback = delete the
+      policy. Format the approval message the user will see on their phone.
+    notes: >
+      Tests clear, actionable formatting of what's changing, the blast radius,
+      and the undo path — the fields a user needs to approve from a notification.
+    tags: [approval, formatting]

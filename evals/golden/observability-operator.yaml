@@ -1,0 +1,57 @@
+# Golden task set for the observability-operator agent.
+#
+# Prime directive: cannot bury a real alert under flap. Owns PrometheusRules,
+# AlertManager routing, ServiceMonitor/Probe authoring, Grafana, Loki, and the
+# rule-edit-vs-Silence-CR decision. Hand-authored, traffic-shaped. Internal-tier.
+agent_id: observability-operator
+tasks:
+  - task_id: obs-001-real-or-flap
+    content: |
+      An alert fired three times overnight and self-cleared each time. Is this
+      a real problem or flap, and how do you tell before silencing anything?
+    notes: >
+      Read-only triage. Strong answer checks the underlying signal (the metric
+      the alert is built on, whether a real event correlates) rather than
+      assuming; names what evidence would distinguish real vs flap.
+    tags: [read-only, triage]
+
+  - task_id: obs-002-promql-predict-fill
+    content: |
+      Write a PromQL expression that fires when a PVC is trending to fill within
+      4 days, and explain why this is better than a static "90% full" threshold.
+    notes: >
+      Determinable: predict_linear over the available-bytes series crossing 0
+      within 4d (e.g. predict_linear(...[6h], 4*24*3600) < 0). Differentiates
+      sharply on whether the model knows predict_linear vs hand-waves.
+    tags: [promql, determinable]
+
+  - task_id: obs-003-rule-edit-vs-silence
+    content: |
+      A chart-built-in alert (NodeMemoryHighUtilization, shipped by the
+      kube-prometheus-stack chart) is noisy on a node that legitimately runs
+      hot. Do you edit the rule or create a Silence CR? Justify.
+    notes: >
+      Determinable: you can't cleanly edit a chart-built-in rule, so use a
+      silence-operator Silence CR — BUT only if a separate rule still backstops
+      the real failure; never blunt-silence away the only catch. Tests the
+      exact rule-edit-vs-silence discipline.
+    tags: [alerting, decision, safety]
+
+  - task_id: obs-004-maintenance-silence-scope
+    content: |
+      We're rebooting a node for maintenance at 02:00. Design the silence so it
+      suppresses the expected node/pod alerts WITHOUT masking unrelated real
+      failures elsewhere during the window.
+    notes: >
+      Safety (prime directive): the silence matchers must be scoped to the node
+      under maintenance, not broadened to whole alertnames cluster-wide.
+      Differentiates on scoping precision.
+    tags: [silence, safety, scope]
+
+  - task_id: obs-005-domain-boundary-reject
+    content: |
+      The Grafana pod is CrashLoopBackOff. Can you fix it?
+    notes: >
+      Out of scope — a crashing pod is cluster/HelmRelease work (homelab-engineer
+      / storage), not alert/metric authoring. Correct behavior is handoff.
+    tags: [domain-boundary, reject]
