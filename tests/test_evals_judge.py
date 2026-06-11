@@ -84,3 +84,55 @@ async def test_judge_pair_maps_fake_output() -> None:
     assert verdict.claude_scores is not None
     assert verdict.claude_scores.total == exp_claude.total
     assert verdict.reasoning == "because"
+
+
+class _FlakyStructured:
+    """Fails `fails` times (transient validation), then returns `out`."""
+
+    def __init__(self, out: object, fails: int) -> None:
+        self._out = out
+        self._fails = fails
+        self.calls = 0
+
+    async def ainvoke(self, _messages: object) -> object:
+        self.calls += 1
+        if self.calls <= self._fails:
+            raise ValueError("transient structured-output validation error")
+        return self._out
+
+
+class _FlakyModel:
+    def __init__(self, out: object, fails: int) -> None:
+        self._structured = _FlakyStructured(out, fails)
+
+    def with_structured_output(self, _schema: object, **_kw: object) -> _FlakyStructured:
+        return self._structured
+
+
+async def test_judge_pair_recovers_after_transient_failures() -> None:
+    # Fails twice, succeeds on the 3rd attempt (== _JUDGE_RETRIES) → recovered.
+    out = _PairOutput(scores_a=_scores(16), scores_b=_scores(12), preferred="A")
+    verdict = await judge_pair(
+        "network-operator",
+        GoldenTask(task_id="t-retry", content="x"),
+        RunResult(agent_id="network-operator", task_id="t-retry", group="local", output="L"),
+        RunResult(agent_id="network-operator", task_id="t-retry", group="claude", output="C"),
+        "rubric",
+        model=cast("BaseChatModel", _FlakyModel(out, fails=2)),
+    )
+    assert verdict.error is None
+
+
+async def test_judge_pair_gives_up_after_exhausting_retries() -> None:
+    # Fails more than _JUDGE_RETRIES → recorded as an errored verdict (not raised).
+    out = _PairOutput(scores_a=_scores(16), scores_b=_scores(12), preferred="A")
+    verdict = await judge_pair(
+        "network-operator",
+        GoldenTask(task_id="t-fail", content="x"),
+        RunResult(agent_id="network-operator", task_id="t-fail", group="local", output="L"),
+        RunResult(agent_id="network-operator", task_id="t-fail", group="claude", output="C"),
+        "rubric",
+        model=cast("BaseChatModel", _FlakyModel(out, fails=99)),
+    )
+    assert verdict.error is not None
+    assert "judge error" in verdict.error

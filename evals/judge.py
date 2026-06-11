@@ -15,7 +15,7 @@ blinding is for; pair it with your own calibration on a sample.
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -27,10 +27,15 @@ from evals.schema import DimensionScores, GoldenTask, JudgeVerdict, Preference, 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.messages import BaseMessage
+    from langchain_core.runnables import Runnable
 
     from agents.state import AgentId
 
 _JUDGE_MAX_TOKENS = 2048
+# The judge occasionally returns structured output that fails schema validation
+# (e.g. a score outside 1-5) — a transient that usually clears on a re-ask. Retry
+# a couple times before giving up, so one bad parse doesn't drop the task.
+_JUDGE_RETRIES = 3
 
 # Sentinel scores for an errored verdict. The report skips any verdict with
 # `error` set, so these are never aggregated — they exist only because
@@ -142,6 +147,22 @@ def errored_verdict(agent_id: AgentId, task_id: str, message: str) -> JudgeVerdi
     )
 
 
+async def _invoke_with_retries(structured: Runnable[Any, Any], messages: list[BaseMessage]) -> Any:
+    """Call the structured judge, retrying transient parse/validation failures.
+
+    The judge sometimes emits structured output that fails schema validation
+    (a score outside 1-5, a malformed field); re-asking usually fixes it. Only
+    the final attempt's exception propagates to the caller's record-and-skip.
+    """
+    for attempt in range(_JUDGE_RETRIES):
+        try:
+            return await structured.ainvoke(messages)
+        except Exception:
+            if attempt == _JUDGE_RETRIES - 1:
+                raise
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
 async def judge_pair(
     agent_id: AgentId,
     task: GoldenTask,
@@ -157,7 +178,7 @@ async def judge_pair(
     out_a, out_b = (claude.output, local.output) if swapped else (local.output, claude.output)
     structured = judge.with_structured_output(_PairOutput)
     try:
-        raw = await structured.ainvoke(_pair_messages(rubric, task, out_a, out_b))
+        raw = await _invoke_with_retries(structured, _pair_messages(rubric, task, out_a, out_b))
     except Exception as exc:  # judge failures are recorded, not fatal to the sweep
         return errored_verdict(agent_id, task.task_id, f"judge error: {type(exc).__name__}: {exc}")
     preference, local_scores, claude_scores = _remap(cast("_PairOutput", raw), swapped=swapped)
@@ -183,7 +204,7 @@ async def score_single(
     judge = model or _default_model()
     structured = judge.with_structured_output(_SingleOutput)
     try:
-        raw = await structured.ainvoke(_single_messages(rubric, task, local.output))
+        raw = await _invoke_with_retries(structured, _single_messages(rubric, task, local.output))
     except Exception as exc:  # judge failures are recorded, not fatal to the sweep
         return errored_verdict(agent_id, task.task_id, f"judge error: {type(exc).__name__}: {exc}")
     out = cast("_SingleOutput", raw)
