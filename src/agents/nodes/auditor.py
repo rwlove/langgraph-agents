@@ -19,7 +19,7 @@ via `tools/mcp_langchain.py:build_mcp_tools_for_agent()`. Adding a
 capability is still a single-source-of-truth change in `tools/mcp.py`.
 
 If the LLM iterates past `recursion_limit` without a final answer
-(qwen2.5:32b sometimes loops on tool calls), we capture whatever
+(the Spark reasoning model sometimes loops on tool calls), we capture whatever
 text was produced and return it; the cron's downstream reporter
 node renders the result for the user. The recursion limit defaults
 to 25 — generous for an audit walk; tightened if costs become a
@@ -45,7 +45,7 @@ _AGENT_ID: AgentId = "auditor"
 _TEMPERATURE = 0.1  # precise, factual, cited
 
 # How many think-act-observe rounds the LLM can take before we cut it
-# off. qwen2.5:32b under tool-use can wander; 25 is enough for a real
+# off. the Spark reasoning model under tool-use can wander; 25 is enough for a real
 # image-enumeration audit (~5 kubectl calls + reasoning between each)
 # while still bounding latency.
 _RECURSION_LIMIT = 25
@@ -94,7 +94,7 @@ async def auditor_node(state: FleetState) -> dict[str, Any]:
     except GraphRecursionError:
         # Hit the recursion limit before producing a final answer.
         # Capture whatever text was emitted so the operator at least
-        # sees the agent's intermediate reasoning. Common qwen2.5:32b
+        # sees the agent's intermediate reasoning. Common the Spark reasoning model
         # failure mode under tool-use.
         slog.warning(
             "audit_recursion_limit_hit",

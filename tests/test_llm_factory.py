@@ -81,12 +81,12 @@ def test_local_spark_returns_chat_ollama_when_spark_healthy(
         model = llm("historian")  # reporter is local-spark
     assert isinstance(model, ChatOllama)
     assert "spark.test" in model.base_url
-    assert model.model == "qwen2.5:32b"
+    assert model.model == "qwen3-next:80b-a3b-instruct-q4_K_M"
     handler = _metrics_handler(model)
     assert handler is not None
     assert handler.agent == "historian"
     assert handler.group == "local-spark"
-    assert handler.model == "qwen2.5:32b"
+    assert handler.model == "qwen3-next:80b-a3b-instruct-q4_K_M"
 
 
 def test_local_spark_coder_returns_chat_ollama_when_spark_healthy(

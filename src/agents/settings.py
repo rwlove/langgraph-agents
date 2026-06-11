@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     ollama_spark_url: str = Field(
         default="http://ollama-spark.ai.svc.cluster.local:11434",
         description=(
-            "Spark-Ollama Service endpoint (qwen2.5:32b). Used for "
+            "Spark-Ollama Service endpoint (qwen3-next:80b-a3b-instruct-q4_K_M). Used for "
             "reasoning/structured-output agents per AGENT_GROUP."
         ),
     )
@@ -280,7 +280,7 @@ class Settings(BaseSettings):
         default=24000,
         description=(
             "Estimated assembled-prompt tokens above which the scorer escalates "
-            "a local-spark / local-spark-coder (qwen2.5:32b) call to Claude "
+            "a local-spark / local-spark-coder (qwen3-next:80b-a3b-instruct-q4_K_M) call to Claude "
             "(reason=context_overflow). Deliberately high: only a genuine "
             "overflow (e.g. a pasted multi-thousand-line log) trips it. Must "
             "stay <= ollama_num_ctx_spark (32768). Lower it once "
@@ -305,7 +305,7 @@ class Settings(BaseSettings):
     ollama_num_ctx_spark: int = Field(
         default=32768,
         description=(
-            "num_ctx for the Spark-served local groups (qwen2.5:32b, "
+            "num_ctx for the Spark-served local groups (qwen3-next:80b-a3b-instruct-q4_K_M, "
             "qwen2.5-coder:32b). The Spark's 128GB unified memory holds qwen2.5's "
             "native 32768-token KV cache with ample headroom, so this stays at "
             "the model's full context. Keep >= "

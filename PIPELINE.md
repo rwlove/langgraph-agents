@@ -276,7 +276,7 @@ Action classes (recorded by the wrapper in `graphs/fleet.py::_DEFAULT_ACTION_CLA
 Every chain ends at [reporter](agents/workspaces/reporter/SOUL.md). Reporter:
 
 - Reads `state.content` (original ask), `state.output` (specialist's raw output), `state.target_agent` (who produced it), `state.rejection`, `state.approval_request`, `state.data_tier`
-- Calls the Spark `qwen2.5:32b` model with reporter's persona
+- Calls the Spark `qwen3-next:80b-a3b-instruct-q4_K_M` model with reporter's persona
 - Returns a **Zulip-markdown DM body** with:
   - Bold first-line conclusion
   - Clickable `obsidian://open?vault=claude&file=<path>` deep links for vault references

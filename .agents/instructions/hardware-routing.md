@@ -13,7 +13,8 @@ Don't assume beyond these; re-verify before sizing model work.
 | Memory bandwidth | **273 GB/s** (NVIDIA GB10) / **276 GB/s** (ASUS GX10) | the binding constraint for token generation |
 | Inter-unit link | **NVIDIA ConnectX-7, 200 Gbps (= 25 GB/s)** + a 10 GbE LAN | GX10 has one ConnectX-7 (Founders ed. has dual QSFP) |
 | Two-unit config | direct ConnectX-7 cable, no switch → **256 GB pool → models up to 405B** | NVIDIA's official ceiling |
-| Measured generation | **qwen2.5:32b ≈ 10 tok/s**, qwen2.5:72b ≈ 5 tok/s | corroborates ~273 GB/s; prompt eval ~240 tok/s |
+| Measured generation | **qwen3-next:80b-a3b ≈ 62 tok/s** (current local-spark model), qwen2.5:32b ≈ 10 tok/s (prev, dense), qwen2.5:72b ≈ 5 tok/s | MoE (3B active) is why the bigger model is also ~6× faster; prompt eval ~240 tok/s |
+| Cold-load | **qwen3-next ≈ 8.6 min** (50 GB off ceph + novel-arch init) | the reason `OLLAMA_LOAD_TIMEOUT=20m`; a restart/eviction stalls the reasoning tier >8 min — keep-warm (`MAX_LOADED=5`) makes it rare |
 | DCGM | mostly broken (power + SM clock only) | use power draw as the "busy" proxy; see `reference_dcgm_gb10_broken_counters` |
 
 **Memory ≫ link (276 ÷ 25 ≈ 11×).** Splitting a model across two Sparks buys
@@ -33,7 +34,7 @@ remote model (32b ≈ 72b in quality, half the speed); **MoE is the lever**
 | Group | Endpoint | Model | Hardware |
 |---|---|---|---|
 | `local-p40` | `http://ollama.ai.svc.cluster.local:11434` | `qwen2.5:7b` | P40 (24 GiB VRAM, Pascal era) — ≤8b model cap per `project_p40_model_size_cap` |
-| `local-spark` | `http://ollama-spark.ai.svc.cluster.local:11434` | `qwen2.5:32b` | NVIDIA Spark / GB10 (Grace-Blackwell) — DCGM counters partly broken; see `reference_dcgm_gb10_broken_counters` |
+| `local-spark` | `http://ollama-spark.ai.svc.cluster.local:11434` | `qwen3-next:80b-a3b-instruct-q4_K_M` | NVIDIA Spark / GB10. MoE (80B/3B active) — bigger + ~6× faster than the prev qwen2.5:32b, but ~8.6 min cold-load. DCGM counters partly broken; see `reference_dcgm_gb10_broken_counters` |
 | `local-spark-coder` | `http://ollama-spark.ai.svc.cluster.local:11434` | `qwen2.5-coder:32b` | Same Spark / GB10 instance as `local-spark`. Coder-tuned model for code-focused agents; Spark's `OLLAMA_MAX_LOADED_MODELS=3` lets both 32b models sit resident |
 | `claude` | Anthropic API | `settings.claude_model` (default `claude-opus-4-7`) | Off-cluster |
 
@@ -64,7 +65,7 @@ remote model (32b ≈ 72b in quality, half the speed); **MoE is the lever**
 1. **`health-tracker` is local-only.** Explicit `escalate=True` or `group_override="claude"` is silently downgraded to `local-p40`.
 2. **`escalate=True` + `ANTHROPIC_API_KEY` present** → Claude, regardless of `AGENT_GROUP`.
 3. **`group == "local-spark"` or `group == "local-spark-coder"`** (same Spark instance, different model):
-   - Spark healthy → Spark + the group's model (general `qwen2.5:32b` or `qwen2.5-coder:32b`).
+   - Spark healthy → Spark + the group's model (general `qwen3-next:80b-a3b-instruct-q4_K_M` or `qwen2.5-coder:32b`).
    - Spark unhealthy, P40 healthy → degrade to P40 + qwen2.5:7b (logged; metric `effective_group=local-p40` reflects what served). Coder requests degrade to the same general 7b — weak at code, but the request doesn't fail.
    - Both down, `degraded_mode_escalation_enabled=True`, key present → Claude.
    - Both down, escalation disabled → raise `LocalOllamaUnavailable` with `failed_group` equal to the originally-requested group. `/inbox` catches and queues the task for retry (see `agents.queue`).
@@ -83,6 +84,6 @@ remote model (32b ≈ 72b in quality, half the speed); **MoE is the lever**
 
 ## chat_completions delegates to the factory
 
-`api/chat_completions.py` (the OpenWebUI surface) calls `agents.llm.llm(agent_id, trigger="openwebui")` for every request. Same per-agent Spark/P40 routing as the /inbox + scheduled-graph paths; reasoning agents (reporter, researcher, supervisor, the five operator agents) get qwen2.5:32b on Spark, code agents (coder, reviewer) get qwen2.5-coder:32b on the same Spark endpoint, light agents get qwen2.5:7b on P40.
+`api/chat_completions.py` (the OpenWebUI surface) calls `agents.llm.llm(agent_id, trigger="openwebui")` for every request. Same per-agent Spark/P40 routing as the /inbox + scheduled-graph paths; reasoning agents (reporter, researcher, supervisor, the five operator agents) get qwen3-next:80b-a3b-instruct-q4_K_M on Spark, code agents (coder, reviewer) get qwen2.5-coder:32b on the same Spark endpoint, light agents get qwen2.5:7b on P40.
 
 The `trigger="openwebui"` propagates to `LangGraphMetricsCallback`'s `trigger` label on `langgraph_calls_total` so Grafana panels filtering on that label keep working. The Langfuse callback also lands on OpenWebUI chats now (same factory attachment), so per-task traces show up alongside /inbox runs in the trace UI.

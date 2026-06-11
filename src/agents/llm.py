@@ -7,7 +7,7 @@ when the degraded-mode-escalation flag is on AND both local paths are down.
 Group enum: `local-p40` | `local-spark` | `local-spark-coder` | `claude`.
 Agents are assigned to groups via `AGENT_GROUP`; light/mechanical agents go
 to P40 (qwen2.5:7b), reasoning/structured-output agents go to Spark general
-(qwen2.5:32b), code-focused agents (`coder`, `reviewer`) go to Spark coder
+(qwen3-next:80b-a3b-instruct-q4_K_M), code-focused agents (`coder`, `reviewer`) go to Spark coder
 (qwen2.5-coder:32b). No agent defaults to Claude.
 
 `local-spark-coder` and `local-spark` share the same Ollama instance on
@@ -140,7 +140,7 @@ class CostCapHit(RuntimeError):
 # Per-group concrete model name. Edit one line here to bump a group's model.
 GROUP_MODELS: dict[ModelGroup, str] = {
     "local-p40": "qwen2.5:7b",
-    "local-spark": "qwen2.5:32b",
+    "local-spark": "qwen3-next:80b-a3b-instruct-q4_K_M",
     "local-spark-coder": "qwen2.5-coder:32b",
     "claude": "",  # set per-call from settings.claude_model
 }

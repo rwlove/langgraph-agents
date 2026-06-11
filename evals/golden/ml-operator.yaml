@@ -11,15 +11,15 @@ agent_id: ml-operator
 tasks:
   - task_id: ml-001-vram-fit-math
     content: |
-      The Spark (GB10) has 128 GB unified memory and OLLAMA_MAX_LOADED_MODELS=3.
-      qwen2.5:32b (~20 GB) and the bge-m3 embedder (~1 GB) are resident. Can we
-      ALSO keep a 70B model at q4 (~40 GB) resident at the same time? Show the
-      arithmetic and name what you're NOT accounting for.
+      The Spark (GB10) has 128 GB unified memory and OLLAMA_MAX_LOADED_MODELS=5.
+      qwen3-next:80b-a3b-instruct (~50 GB) and the bge-m3 embedder (~1 GB) are
+      resident. Can we ALSO keep a 70B model at q4 (~40 GB) resident at the same
+      time? Show the arithmetic and name what you're NOT accounting for.
     notes: >
-      Determinable: 20+1+40 = 61 GB < 128 GB so it nominally fits the 3-model
-      slot — but a strong answer also flags KV-cache growth with context length
-      + headroom, i.e. "fits at rest, watch it under load." Differentiates on
-      whether the model does the math AND raises the caveat.
+      Determinable: 50+1+40 = 91 GB < 128 GB so it nominally fits the model
+      slots — but it's now tight, and a strong answer flags KV-cache growth with
+      context length + headroom, i.e. "fits at rest, watch it under load."
+      Differentiates on whether the model does the math AND raises the caveat.
     tags: [read-only, gpu, math]
 
   - task_id: ml-002-routing-under-constraint
@@ -35,9 +35,9 @@ tasks:
 
   - task_id: ml-003-incident-triage
     content: |
-      Spark-routed agents are suddenly timing out. `ollama ps` shows qwen2.5:32b
-      is NOT resident and a ~65 GB model is mid-load. Diagnose the root cause and
-      give the fix.
+      Spark-routed agents are suddenly timing out. `ollama ps` shows
+      qwen3-next:80b-a3b-instruct is NOT resident and a ~65 GB model is mid-load.
+      Diagnose the root cause and give the fix.
     notes: >
       Determinable root cause: an oversized model is being loaded on the shared
       Spark, evicting the fleet's qwen and causing repeated multi-minute
