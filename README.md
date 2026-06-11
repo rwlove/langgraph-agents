@@ -52,7 +52,7 @@ The `agents.llm.llm(agent_id)` factory chooses the model per-agent:
 | Group | Endpoint | Model | Used by |
 |---|---|---|---|
 | `local-p40` | `ollama.ai.svc.cluster.local:11434` | `qwen2.5:7b` | triager, note-maker, errand-runner, property-coordinator, health-tracker, doc-writer |
-| `local-spark` | `ollama-spark.ai.svc.cluster.local:11434` | `qwen2.5:32b` | reporter, researcher, supervisor + all 5 operator specialists |
+| `local-spark` | `ollama-spark.ai.svc.cluster.local:11434` | `qwen3-next:80b-a3b-instruct-q4_K_M` | reporter, researcher, supervisor + all 5 operator specialists |
 | `local-spark-coder` | `ollama-spark.ai.svc.cluster.local:11434` | `qwen2.5-coder:32b` | coder, reviewer |
 | `claude` | Anthropic API | `settings.claude_model` | None by default; opt-in per-call via `escalate=True` or when both local groups are unhealthy AND `degraded_mode_escalation_enabled=True` |
 

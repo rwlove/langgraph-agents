@@ -253,7 +253,7 @@ def test_compute_anthropic_cost_haiku() -> None:
 
 def test_compute_anthropic_cost_unknown_model_returns_zero() -> None:
     """Local Ollama models and unrecognised strings return 0.0."""
-    assert _compute_anthropic_cost("qwen2.5:32b", 100_000, 50_000) == 0.0
+    assert _compute_anthropic_cost("qwen3-next:80b-a3b-instruct-q4_K_M", 100_000, 50_000) == 0.0
     assert _compute_anthropic_cost("", 100_000, 50_000) == 0.0
     assert _compute_anthropic_cost("claude-future-9", 100_000, 50_000) == 0.0
 
@@ -289,7 +289,7 @@ def test_callback_emits_cost_usd_for_claude_model() -> None:
 
 def test_callback_emits_zero_cost_for_local_model() -> None:
     """LangGraphMetricsCallback.on_llm_end emits zero cost for Ollama models."""
-    model = "qwen2.5:32b"
+    model = "qwen3-next:80b-a3b-instruct-q4_K_M"
     cb = LangGraphMetricsCallback(agent="local-cost-test", group="local-spark", model=model)
     run_id = uuid4()
 
