@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from typing import Any
+
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.errors import GraphRecursionError
 from langgraph.prebuilt import create_react_agent
 
@@ -12,15 +20,50 @@ from agents.settings import get_settings
 from agents.state import AgentId
 from agents.tools.mcp_langchain import build_mcp_tools_for_agent
 
-_RECURSION_LIMIT = 15
+# The evidence sub-agent is a ReAct loop. Each tool call costs ~2 super-steps
+# (agent -> tool -> agent), so a budget of N tool calls needs ~2N+1 steps. Keep
+# the recursion limit comfortably above the advertised tool budget, or the loop
+# trips GraphRecursionError before it can finish its own instructions and the
+# whole pre-pass yields nothing. See langgraph-agents#130.
+_MAX_TOOL_CALLS = 8
+_RECURSION_LIMIT = 2 * _MAX_TOOL_CALLS + 4  # = 20; headroom over the ~17-step budget
 slog = get_logger("nodes.evidence")
+
+
+def _extract_evidence(messages: list[BaseMessage]) -> str:
+    """Pull a text evidence block out of a (possibly truncated) message list.
+
+    Happy path: the sub-agent emitted a final summary — return it verbatim.
+    Salvage path (recursion limit hit, or the last turn was a pending tool
+    call): stitch the raw tool observations gathered so far, so a stalled loop
+    still contributes evidence instead of nothing (langgraph-agents#130).
+    """
+    if not messages:
+        return ""
+
+    last = messages[-1]
+    if isinstance(last, AIMessage) and not getattr(last, "tool_calls", None):
+        summary = str(last.content).strip()
+        if summary:
+            return summary
+
+    salvaged = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            observation = str(getattr(msg, "content", "")).strip()
+            if observation:
+                name = getattr(msg, "name", None) or "tool"
+                salvaged.append(f"- {name}: {observation}")
+    return "\n".join(salvaged)
 
 
 async def gather_evidence(agent_id: AgentId, request: str) -> str:
     """Run a lightweight ReAct loop to collect tool evidence for `request`.
 
     Returns a text block the caller embeds into its structured-output prompt.
-    Returns empty string if no tools are configured or the gateway is down.
+    Returns empty string if no tools are configured or the gateway is down. If
+    the loop hits the recursion limit, the observations gathered so far are
+    salvaged rather than discarded (langgraph-agents#130).
     """
     tools = await build_mcp_tools_for_agent(agent_id)
     if not tools:
@@ -41,7 +84,7 @@ async def gather_evidence(agent_id: AgentId, request: str) -> str:
                 "outputs summarised as bullet points: "
                 "`<tool_name>: <key finding>`. "
                 "Stop after you have enough evidence to answer the request, "
-                "or after 8 tool calls — whichever comes first.\n\n"
+                f"or after {_MAX_TOOL_CALLS} tool calls — whichever comes first.\n\n"
                 "GRAFANA DATASOURCE UIDs (use exactly as shown — do NOT use "
                 "the display name):\n"
                 f"  Prometheus: {prom_uid}\n"
@@ -50,23 +93,25 @@ async def gather_evidence(agent_id: AgentId, request: str) -> str:
         ),
     )
 
+    # Stream so a recursion-limit abort still leaves us the partial state to
+    # salvage. ``stream_mode="values"`` yields the full message list after each
+    # super-step; the last one captured before an error is what we mine.
+    last_state: dict[str, Any] = {}
+    salvaged = False
     try:
-        result = await agent.ainvoke(
+        async for state in agent.astream(
             {"messages": [HumanMessage(content=f"GATHER EVIDENCE FOR:\n\n{request}")]},
             {"recursion_limit": _RECURSION_LIMIT},
-        )
+            stream_mode="values",
+        ):
+            last_state = state
     except GraphRecursionError:
         slog.warning("evidence_gather_recursion_limit_hit", agent=agent_id)
-        return ""
+        salvaged = True
     except Exception as exc:
         slog.warning("evidence_gather_failed", agent=agent_id, error=str(exc))
         return ""
 
-    messages = result.get("messages", [])
-    if not messages:
-        return ""
-
-    last = messages[-1]
-    text = str(getattr(last, "content", "")).strip()
-    slog.info("evidence_gathered", agent=agent_id, chars=len(text))
+    text = _extract_evidence(last_state.get("messages", []))
+    slog.info("evidence_gathered", agent=agent_id, chars=len(text), salvaged=salvaged)
     return text
