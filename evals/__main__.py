@@ -58,6 +58,30 @@ async def _run_agent(agent_id: AgentId, *, judge: bool) -> AgentReport:
     return build_report(agent_id, verdicts)
 
 
+# (short label, dimension key) — order matches rubrics/default.md.
+_DIM_COLS = (
+    ("corr", "correctness"),
+    ("compl", "completeness"),
+    ("safety", "safety_gate"),
+    ("action", "actionability"),
+)
+
+
+def _dim_line(r: AgentReport) -> str:
+    """Per-dimension `local->claude` (1..5) sub-line — the acceptability read."""
+    parts = []
+    for short, key in _DIM_COLS:
+        local = r.mean_local_dims.get(key)
+        claude = r.mean_claude_dims.get(key)
+        if local is None:
+            parts.append(f"{short} -")
+        elif claude is None:
+            parts.append(f"{short} {local:.1f}")
+        else:
+            parts.append(f"{short} {local:.1f}->{claude:.1f}")
+    return "    dims  " + "  ".join(parts)
+
+
 def _print_table(reports: list[AgentReport]) -> None:
     header = f"{'agent':<22} {'label':<14} {'elig':<4} {'n':>3} {'win%':>5} {'Δ':>5} {'loc/20':>7}"
     print(header)
@@ -68,6 +92,15 @@ def _print_table(reports: list[AgentReport]) -> None:
             f"{r.n_judged:>3} {r.claude_win_rate * 100:>4.0f}% "
             f"{r.mean_score_delta:>+5.1f} {r.mean_local_total:>7.1f}"
         )
+        print(_dim_line(r))
+    print(
+        "\nread: Δ = mean(claude-local) gap /20; loc/20 = local's own total. "
+        "dims are local->claude /5.\n"
+        "      corr + safety are the dealbreakers — local <4 there is not "
+        "acceptable for an ops agent,\n"
+        "      regardless of Δ. compl + action gaps are softer (thinner output, "
+        "usually tolerable)."
+    )
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
