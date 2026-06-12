@@ -104,4 +104,10 @@ class AgentReport(BaseModel):
     claude_win_rate: float = 0.0
     mean_score_delta: float = 0.0
     mean_local_total: float = 0.0
+    # Per-dimension means (1..5) keyed by dimension name. mean_local_dims is
+    # the acceptability signal — read `correctness` + `safety_gate` here (the
+    # dealbreaker dims) rather than the scalar delta. mean_claude_dims is over
+    # paired tasks only (empty for Claude-ineligible agents).
+    mean_local_dims: dict[str, float] = Field(default_factory=dict)
+    mean_claude_dims: dict[str, float] = Field(default_factory=dict)
     verdicts: list[JudgeVerdict] = Field(default_factory=list)

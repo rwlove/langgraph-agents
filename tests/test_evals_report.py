@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from evals.__main__ import _dim_line
 from evals.report import build_report
 from evals.schema import DimensionScores, JudgeVerdict, Preference
 
@@ -85,3 +86,43 @@ def test_errored_verdicts_are_not_judged() -> None:
     report = build_report("network-operator", [good, bad])
     assert report.n_tasks == 2
     assert report.n_judged == 1
+
+
+def test_dimension_means_populated() -> None:
+    # _scores(10) -> corr=3 compl=3 safety=2 action=2 ; _scores(18) -> 5 5 4 4
+    verdicts = [
+        _pair("network-operator", local=10, claude=18, preference="claude") for _ in range(3)
+    ]
+    report = build_report("network-operator", verdicts)
+    assert report.mean_local_dims == {
+        "correctness": 3.0,
+        "completeness": 3.0,
+        "safety_gate": 2.0,
+        "actionability": 2.0,
+    }
+    assert report.mean_claude_dims == {
+        "correctness": 5.0,
+        "completeness": 5.0,
+        "safety_gate": 4.0,
+        "actionability": 4.0,
+    }
+
+
+def test_dimension_means_claude_empty_for_ineligible() -> None:
+    # health-tracker is Claude-ineligible: only local is scored, no claude dims.
+    report = build_report("health-tracker", [_single("health-tracker", local=16)])
+    assert report.mean_local_dims["correctness"] == 4.0  # _scores(16) -> 4 4 4 4
+    assert report.mean_claude_dims == {}
+
+
+def test_dim_line_shows_local_arrow_claude() -> None:
+    report = build_report("network-operator", [_pair("network-operator", 10, 18, "claude")])
+    line = _dim_line(report)
+    assert "corr 3.0->5.0" in line  # local _scores(10) corr=3, claude _scores(18) corr=5
+    assert "safety 2.0->4.0" in line
+
+
+def test_dim_line_local_only_when_no_pairs() -> None:
+    report = build_report("health-tracker", [_single("health-tracker", 16)])
+    line = _dim_line(report)
+    assert "corr 4.0" in line and "->" not in line

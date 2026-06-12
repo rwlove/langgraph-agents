@@ -29,6 +29,20 @@ _CLAUDE_DELTA = 2.0
 # Mean local total (of 20) at or above which local is "good enough" to offload to.
 _LOCAL_ADEQUATE_TOTAL = 14.0
 
+# The four scored dimensions (see rubrics/default.md). correctness + safety_gate
+# are the dealbreakers — a low local score there is unacceptable for an ops
+# agent regardless of the aggregate delta.
+_DIMENSIONS = ("correctness", "completeness", "safety_gate", "actionability")
+
+
+def _dim_means(verdicts: list[JudgeVerdict], attr: str) -> dict[str, float]:
+    """Mean of each dimension (1..5) over `verdicts`, reading `attr`
+    (``local_scores`` or ``claude_scores``). Empty if none carry it."""
+    scored = [getattr(v, attr) for v in verdicts if getattr(v, attr) is not None]
+    if not scored:
+        return {}
+    return {d: mean(getattr(s, d) for s in scored) for d in _DIMENSIONS}
+
 
 def _label(
     *, eligible: bool, mean_local: float, win_rate: float, delta: float, has_pairs: bool
@@ -70,5 +84,7 @@ def build_report(agent_id: AgentId, verdicts: list[JudgeVerdict]) -> AgentReport
         claude_win_rate=win_rate,
         mean_score_delta=delta,
         mean_local_total=mean_local,
+        mean_local_dims=_dim_means(judged, "local_scores"),
+        mean_claude_dims=_dim_means(paired, "claude_scores"),
         verdicts=verdicts,
     )
