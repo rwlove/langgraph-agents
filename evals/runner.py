@@ -15,6 +15,7 @@ local and corrupting the A/B.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import time
 from typing import TYPE_CHECKING, Any
@@ -22,9 +23,25 @@ from unittest.mock import patch
 
 import agents.llm as llm_module
 from agents.nodes import NODES
+from agents.settings import get_settings
 from agents.state import FleetState
 from evals.registry import is_claude_eligible
 from evals.schema import GoldenTask, RunGroup, RunResult
+
+# Per-node wall-clock cap. The nodes are `async def` but call sync-blocking code
+# (sync LLM / MCP / file I/O) inside, which pins the event loop — `wait_for`
+# alone can't interrupt them. So each node runs in its own worker thread (with
+# its own loop for the async body) and `wait_for` bounds it from the main loop.
+# On timeout the worker is abandoned (a hung gateway read keeps the thread alive
+# but releases the GIL) and the task is recorded as an error rather than
+# stalling the whole sweep — ~24min gateway-evidence hangs were observed
+# in-cluster. Overridable by the CLI (`--timeout`).
+NODE_TIMEOUT_S = 240.0
+
+# Vault subdirs where nodes write their real deliverable. Globbed by task_id —
+# unique per golden task, never a live ULID — so capture neither races with nor
+# clobbers live fleet traffic.
+_DRAFT_DIRS = ("inbox/drafts", "reports/research")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -61,11 +78,51 @@ def _state_for(agent_id: AgentId, task: GoldenTask) -> FleetState:
     )
 
 
-async def _invoke_node(agent_id: AgentId, state: FleetState) -> dict[str, Any]:
+def _run_node_sync(agent_id: AgentId, state: FleetState) -> dict[str, Any]:
+    """Invoke the node to completion in the calling (worker) thread.
+
+    Handles sync and async nodes; an async node gets a fresh event loop here so
+    the caller's loop stays free to enforce the timeout. The Claude-forcing
+    ``patch.object`` in ``run_task`` is a module-global mutation held across the
+    await, so the worker thread sees the patched ``llm``.
+    """
     result = NODES[agent_id](state)
     if inspect.isawaitable(result):
-        return await result
+        return asyncio.run(result)
     return result
+
+
+async def _invoke_node(agent_id: AgentId, state: FleetState) -> dict[str, Any]:
+    return await asyncio.wait_for(
+        asyncio.to_thread(_run_node_sync, agent_id, state), NODE_TIMEOUT_S
+    )
+
+
+def _capture_and_clear_draft(task_id: str) -> str:
+    """Read back — and remove — the vault file the node just wrote for this task.
+
+    Returns its content, or "" if the node wrote none. Removing it stops the
+    eval from polluting the real vault; the per-task_id glob is exact (golden
+    ids never collide with the ULID-named files real traffic produces), so this
+    only ever touches the file this run created.
+    """
+    vault_root = get_settings().vault_root
+    matches = [
+        p
+        for sub in _DRAFT_DIRS
+        for p in vault_root.joinpath(sub).glob(f"*{task_id}*.md")
+        if p.is_file()
+    ]
+    if not matches:
+        return ""
+    newest = max(matches, key=lambda p: p.stat().st_mtime)
+    content = newest.read_text(encoding="utf-8", errors="replace")
+    for p in matches:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    return content
 
 
 async def run_task(agent_id: AgentId, task: GoldenTask, group: RunGroup) -> RunResult:
@@ -99,7 +156,17 @@ async def run_task(agent_id: AgentId, task: GoldenTask, group: RunGroup) -> RunR
                 update = await _invoke_node(agent_id, state)
         else:
             update = await _invoke_node(agent_id, state)
+    except TimeoutError:
+        _capture_and_clear_draft(task.task_id)  # best-effort; an orphaned worker may still write
+        return RunResult(
+            agent_id=agent_id,
+            task_id=task.task_id,
+            group=group,
+            latency_s=time.perf_counter() - started,
+            error=f"node timeout >{NODE_TIMEOUT_S:.0f}s",
+        )
     except Exception as exc:  # the harness records failures, never crashes the sweep
+        _capture_and_clear_draft(task.task_id)
         return RunResult(
             agent_id=agent_id,
             task_id=task.task_id,
@@ -108,10 +175,13 @@ async def run_task(agent_id: AgentId, task: GoldenTask, group: RunGroup) -> RunR
             error=f"{type(exc).__name__}: {exc}",
         )
 
+    # Read the real deliverable (and clear it) before the next run overwrites it.
+    draft = _capture_and_clear_draft(task.task_id)
     return RunResult(
         agent_id=agent_id,
         task_id=task.task_id,
         group=group,
         output=str(update.get("output") or ""),
+        draft=draft,
         latency_s=time.perf_counter() - started,
     )

@@ -7,16 +7,20 @@ unit-tested here — these cover the cluster-free seams.
 from __future__ import annotations
 
 import inspect
+import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
+import evals.runner as runner_mod
 from agents.nodes import NODES
 from agents.state import AgentId
-from evals.runner import make_claude_wrapper, run_task
-from evals.schema import GoldenTask
+from evals.runner import _capture_and_clear_draft, make_claude_wrapper, run_task
+from evals.schema import GoldenTask, RunResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import pytest
     from langchain_core.language_models.chat_models import BaseChatModel
 
 
@@ -43,6 +47,84 @@ async def test_run_task_skips_claude_for_ineligible() -> None:
     assert res.skipped is True
     assert res.error is None
     assert res.output == ""
+
+
+def test_run_result_candidate_prefers_draft_then_output() -> None:
+    base = {"agent_id": "ml-operator", "task_id": "t", "group": "local"}
+    assert RunResult(**base, output="handle", draft="DEEP").candidate == "DEEP"
+    assert RunResult(**base, output="handle").candidate == "handle"  # no draft → handle
+    assert RunResult(**base).candidate == ""  # neither
+
+
+def test_capture_and_clear_draft_reads_then_removes(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    drafts = tmp_path / "inbox" / "drafts"
+    drafts.mkdir(parents=True)
+    draft = drafts / "network-net-001-segmentation-audit.md"
+    draft.write_text("REAL DELIVERABLE", encoding="utf-8")
+    monkeypatch.setattr(runner_mod, "get_settings", lambda: SimpleNamespace(vault_root=tmp_path))
+
+    # globs by task_id (prefix `network-`, agent-specific), reads, and removes it
+    assert _capture_and_clear_draft("net-001-segmentation-audit") == "REAL DELIVERABLE"
+    assert not draft.exists()  # cleared → no real-vault pollution
+    assert _capture_and_clear_draft("net-001-segmentation-audit") == ""  # gone on re-read
+
+
+def test_capture_and_clear_draft_finds_research_dir(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    research = tmp_path / "reports" / "research"
+    research.mkdir(parents=True)
+    (research / "res-007-some-slug.md").write_text("FINDINGS", encoding="utf-8")
+    monkeypatch.setattr(runner_mod, "get_settings", lambda: SimpleNamespace(vault_root=tmp_path))
+    assert _capture_and_clear_draft("res-007") == "FINDINGS"
+
+
+def test_capture_and_clear_draft_empty_when_no_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_mod, "get_settings", lambda: SimpleNamespace(vault_root=tmp_path))
+    assert _capture_and_clear_draft("nothing-here") == ""  # missing dirs glob to nothing
+
+
+async def test_run_task_captures_draft_as_candidate(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    drafts = tmp_path / "inbox" / "drafts"
+    drafts.mkdir(parents=True)
+    monkeypatch.setattr(runner_mod, "get_settings", lambda: SimpleNamespace(vault_root=tmp_path))
+
+    def fake_node(state: Any) -> dict[str, str]:
+        # mirror the real nodes: write the substance to the vault, return a handle
+        (drafts / f"ml-{state.task_id}.md").write_text("FULL ANALYSIS", encoding="utf-8")
+        return {"output": "ml finding: /vault/inbox/drafts/ml-ml-001.md (knob=model)"}
+
+    monkeypatch.setitem(NODES, "ml-operator", fake_node)
+    res = await run_task("ml-operator", GoldenTask(task_id="ml-001", content="vram math"), "local")
+
+    assert res.error is None
+    assert res.output.startswith("ml finding:")  # handle preserved
+    assert res.draft == "FULL ANALYSIS"  # real deliverable captured
+    assert res.candidate == "FULL ANALYSIS"  # judge will score this, not the handle
+    assert not (drafts / "ml-ml-001.md").exists()  # and cleared from the vault
+
+
+async def test_run_task_times_out_instead_of_stalling(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner_mod, "get_settings", lambda: SimpleNamespace(vault_root=tmp_path))
+    monkeypatch.setattr(runner_mod, "NODE_TIMEOUT_S", 0.1)
+
+    def hung_node(_state: Any) -> dict[str, str]:
+        time.sleep(0.5)  # sync-blocking, like a hung gateway evidence call
+        return {"output": "never reached"}
+
+    monkeypatch.setitem(NODES, "ml-operator", hung_node)
+    res = await run_task("ml-operator", GoldenTask(task_id="ml-timeout", content="x"), "local")
+
+    assert res.error is not None
+    assert "timeout" in res.error  # recorded, not a 24min stall
 
 
 def test_operator_node_modules_expose_llm() -> None:
