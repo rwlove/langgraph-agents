@@ -57,10 +57,23 @@ class RunResult(BaseModel):
     task_id: str
     group: RunGroup
     output: str = ""
+    # The agent's real deliverable, when it writes one. Most nodes write their
+    # substance to a vault file (inbox/drafts/<kind>-<task_id>.md,
+    # reports/research/<task_id>-*.md) and return only a short handle in
+    # `output` — judging `output` alone scores the pointer, not the work. The
+    # runner reads the file back into `draft` (and removes it) right after the
+    # run. Empty when the node wrote no file.
+    draft: str = ""
     latency_s: float = 0.0
     error: str | None = None
     # True when the Claude run was deliberately not attempted (ineligible agent).
     skipped: bool = False
+
+    @property
+    def candidate(self) -> str:
+        """The text the judge should score: the real deliverable if the node
+        wrote one, else the inline output handle."""
+        return self.draft or self.output
 
 
 class DimensionScores(BaseModel):

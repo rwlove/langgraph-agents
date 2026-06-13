@@ -20,6 +20,7 @@ import sys
 from typing import cast
 
 from agents.state import AgentId
+from evals import runner
 from evals.judge import errored_verdict, judge_pair, score_single
 from evals.loader import available_agents, load_golden_for, load_rubric
 from evals.registry import is_claude_eligible
@@ -111,6 +112,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--all", action="store_true", help="run every agent with a golden set")
     parser.add_argument("--no-judge", action="store_true", help="run nodes only, skip judging")
     parser.add_argument("--out", default=None, help="write full reports as JSON to this path")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=runner.NODE_TIMEOUT_S,
+        help=f"per-node wall-clock cap in seconds (default {runner.NODE_TIMEOUT_S:.0f}); a node "
+        "exceeding it is recorded as an error instead of stalling the sweep",
+    )
     return parser.parse_args(argv)
 
 
@@ -128,16 +136,27 @@ async def _amain(argv: list[str]) -> int:
         print(f"no golden set for: {', '.join(unknown)}", file=sys.stderr)
         return 2
 
+    runner.NODE_TIMEOUT_S = args.timeout
+    print(
+        f"per-node timeout {args.timeout:.0f}s; each run's vault draft is captured + "
+        "removed (no real-vault pollution)",
+        file=sys.stderr,
+    )
+
+    def _persist(reps: list[AgentReport]) -> None:
+        if not args.out:
+            return
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump([r.model_dump() for r in reps], fh, indent=2)
+
     reports: list[AgentReport] = []
     for agent_id in selected:
         print(f"running {agent_id} ...", file=sys.stderr)
         reports.append(await _run_agent(cast("AgentId", agent_id), judge=not args.no_judge))
+        _persist(reports)  # incremental: a mid-sweep crash keeps completed agents
 
     _print_table(reports)
     if args.out:
-        payload = [r.model_dump() for r in reports]
-        with open(args.out, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2)
         print(f"\nwrote {args.out}", file=sys.stderr)
     return 0
 

@@ -175,7 +175,12 @@ async def judge_pair(
     """Blind-score local vs Claude output for one task."""
     judge = model or _default_model()
     swapped = swap_for(task.task_id)
-    out_a, out_b = (claude.output, local.output) if swapped else (local.output, claude.output)
+    # `candidate` is the agent's real deliverable (the vault draft) when it
+    # wrote one, else the inline output handle — judging `output` alone scores
+    # a pointer, not the work.
+    out_a, out_b = (
+        (claude.candidate, local.candidate) if swapped else (local.candidate, claude.candidate)
+    )
     structured = judge.with_structured_output(_PairOutput)
     try:
         raw = await _invoke_with_retries(structured, _pair_messages(rubric, task, out_a, out_b))
@@ -204,7 +209,8 @@ async def score_single(
     judge = model or _default_model()
     structured = judge.with_structured_output(_SingleOutput)
     try:
-        raw = await _invoke_with_retries(structured, _single_messages(rubric, task, local.output))
+        messages = _single_messages(rubric, task, local.candidate)
+        raw = await _invoke_with_retries(structured, messages)
     except Exception as exc:  # judge failures are recorded, not fatal to the sweep
         return errored_verdict(agent_id, task.task_id, f"judge error: {type(exc).__name__}: {exc}")
     out = cast("_SingleOutput", raw)
