@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING, Any, cast
 import evals.runner as runner_mod
 from agents.nodes import NODES
 from agents.state import AgentId
-from evals.runner import _capture_and_clear_draft, make_claude_wrapper, run_task
+from evals.runner import (
+    _capture_and_clear_draft,
+    clear_eval_drafts,
+    make_claude_wrapper,
+    run_task,
+)
 from evals.schema import GoldenTask, RunResult
 
 if TYPE_CHECKING:
@@ -79,6 +84,29 @@ def test_capture_and_clear_draft_finds_research_dir(
     (research / "res-007-some-slug.md").write_text("FINDINGS", encoding="utf-8")
     monkeypatch.setattr(runner_mod, "get_settings", lambda: SimpleNamespace(vault_root=tmp_path))
     assert _capture_and_clear_draft("res-007") == "FINDINGS"
+
+
+def test_clear_eval_drafts_removes_leftovers_for_given_tasks(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    drafts = tmp_path / "inbox" / "drafts"
+    research = tmp_path / "reports" / "research"
+    drafts.mkdir(parents=True)
+    research.mkdir(parents=True)
+    # leftovers an orphaned timed-out worker wrote after its run's own cleanup
+    (drafts / "storage-stor-001-tier-audit.md").write_text("orphan", encoding="utf-8")
+    (research / "res-007-slug.md").write_text("orphan", encoding="utf-8")
+    # a real live-traffic draft (ULID name) the cleanup must NOT touch
+    keep = drafts / "observability-01KTZWFNJJYX9QXQ2X3GHJ3JV2.md"
+    keep.write_text("live traffic", encoding="utf-8")
+    monkeypatch.setattr(runner_mod, "get_settings", lambda: SimpleNamespace(vault_root=tmp_path))
+
+    removed = clear_eval_drafts(["stor-001-tier-audit", "res-007", "never-ran"])
+
+    assert removed == 2
+    assert not (drafts / "storage-stor-001-tier-audit.md").exists()
+    assert not (research / "res-007-slug.md").exists()
+    assert keep.exists()  # live traffic untouched
 
 
 def test_capture_and_clear_draft_empty_when_no_file(
