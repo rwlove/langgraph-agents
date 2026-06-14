@@ -44,7 +44,8 @@ NODE_TIMEOUT_S = 240.0
 _DRAFT_DIRS = ("inbox/drafts", "reports/research")
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
+    from pathlib import Path
 
     from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -98,21 +99,26 @@ async def _invoke_node(agent_id: AgentId, state: FleetState) -> dict[str, Any]:
     )
 
 
-def _capture_and_clear_draft(task_id: str) -> str:
-    """Read back — and remove — the vault file the node just wrote for this task.
-
-    Returns its content, or "" if the node wrote none. Removing it stops the
-    eval from polluting the real vault; the per-task_id glob is exact (golden
-    ids never collide with the ULID-named files real traffic produces), so this
-    only ever touches the file this run created.
-    """
+def _draft_files_for(task_id: str) -> list[Path]:
+    """Vault draft files for one task. The per-task_id glob is exact — golden
+    ids never collide with the ULID-named files real fleet traffic produces, so
+    this only ever matches files the eval itself wrote."""
     vault_root = get_settings().vault_root
-    matches = [
+    return [
         p
         for sub in _DRAFT_DIRS
         for p in vault_root.joinpath(sub).glob(f"*{task_id}*.md")
         if p.is_file()
     ]
+
+
+def _capture_and_clear_draft(task_id: str) -> str:
+    """Read back — and remove — the vault file the node just wrote for this task.
+
+    Returns its content, or "" if the node wrote none. Removing it stops the
+    eval from polluting the real vault.
+    """
+    matches = _draft_files_for(task_id)
     if not matches:
         return ""
     newest = max(matches, key=lambda p: p.stat().st_mtime)
@@ -123,6 +129,27 @@ def _capture_and_clear_draft(task_id: str) -> str:
         except OSError:
             pass
     return content
+
+
+def clear_eval_drafts(task_ids: Iterable[str]) -> int:
+    """Sweep-end backstop: remove any leftover vault drafts for these tasks.
+
+    The per-run ``_capture_and_clear_draft`` misses one case — a task that hit
+    the node timeout leaves an orphaned worker thread running, which can write
+    its draft *after* that cleanup. Those orphans finish during
+    ``asyncio.run``'s executor drain, so this must be called from ``main`` once
+    that drain completes (not at the end of the async sweep). Returns the count
+    removed.
+    """
+    removed = 0
+    for task_id in task_ids:
+        for p in _draft_files_for(task_id):
+            try:
+                p.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 async def run_task(agent_id: AgentId, task: GoldenTask, group: RunGroup) -> RunResult:

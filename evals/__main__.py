@@ -28,6 +28,10 @@ from evals.report import build_report
 from evals.runner import run_task
 from evals.schema import AgentReport, GoldenTask, JudgeVerdict
 
+# Task ids the sweep ran — `main` clears their leftover drafts after asyncio.run
+# drains the executor (an orphaned timed-out worker writes its draft post-run).
+_SWEEP_TASK_IDS: list[str] = []
+
 
 async def _verdict_for(
     agent_id: AgentId, task: GoldenTask, rubric: str, *, judge: bool
@@ -143,6 +147,10 @@ async def _amain(argv: list[str]) -> int:
         file=sys.stderr,
     )
 
+    _SWEEP_TASK_IDS.clear()
+    for agent_id in selected:
+        _SWEEP_TASK_IDS.extend(t.task_id for t in load_golden_for(cast("AgentId", agent_id)).tasks)
+
     def _persist(reps: list[AgentReport]) -> None:
         if not args.out:
             return
@@ -162,7 +170,15 @@ async def _amain(argv: list[str]) -> int:
 
 
 def main() -> None:
-    raise SystemExit(asyncio.run(_amain(sys.argv[1:])))
+    exit_code = asyncio.run(_amain(sys.argv[1:]))
+    # asyncio.run has drained the thread executor by now, so any draft an
+    # orphaned (timed-out) worker wrote after its run's own capture-and-clear
+    # has landed — remove those leftovers so the sweep leaves the vault clean.
+    if _SWEEP_TASK_IDS:
+        removed = runner.clear_eval_drafts(_SWEEP_TASK_IDS)
+        if removed:
+            print(f"cleaned {removed} leftover eval draft(s) from timed-out tasks", file=sys.stderr)
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":
